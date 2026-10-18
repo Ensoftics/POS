@@ -1,0 +1,54 @@
+@import 'tailwindcss';
+@import '@pos/ui-tokens/theme.css';
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    color: var(--color-neutral-900);
+    background: var(--color-neutral-50);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Sinhala and Tamil glyphs need more vertical room than Latin text. */
+  html:lang(si),
+  html:lang(ta) {
+    line-height: 1.7;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-brand-600);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* Receipts: printing shows only the receipt, sized for 80 mm roll printers. */
+@media print {
+  @page {
+    margin: 4mm;
+  }
+  body * {
+    visibility: hidden;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 72mm;
+    max-width: none;
+    padding: 0;
+    box-shadow: none;
+    border: 0;
+  }
+}

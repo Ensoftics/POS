@@ -1,0 +1,64 @@
+# Production stack for one server: TLS proxy -> web (nginx) -> API, plus a one-shot
+# migration job. PostgreSQL and S3 are external (managed services recommended: they give
+# point-in-time recovery and durable storage). See docs/operations/deployment.md.
+#
+#   docker compose --env-file .env up -d          # after building or pulling the images
+name: ensoftic-pos-prod
+
+services:
+  migrate:
+    image: ${IMAGE_PREFIX:-ensoftic-pos}-migrate:${RELEASE:-latest}
+    environment:
+      DATABASE_URL: ${MIGRATION_DATABASE_URL}
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL}
+    restart: 'no'
+
+  api:
+    image: ${IMAGE_PREFIX:-ensoftic-pos}-api:${RELEASE:-latest}
+    env_file: [.env]
+    environment:
+      NODE_ENV: production
+      PORT: '4000'
+      # Caddy -> nginx -> API.
+      TRUST_PROXY: '2'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+
+  web:
+    image: ${IMAGE_PREFIX:-ensoftic-pos}-web:${RELEASE:-latest}
+    environment:
+      API_UPSTREAM: api:4000
+      IMAGE_ORIGIN: ${IMAGE_ORIGIN}
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    ports:
+      # Published only on the host for local smoke tests; Caddy reaches it on the network.
+      - '127.0.0.1:${WEB_PORT:-8080}:8080'
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    profiles: [tls]
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    ports: ['80:80', '443:443']
+    depends_on: [web]
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "pos-dev",
+      "credentials": [{ "accessKey": "pos_storage_dev", "secretKey": "pos_storage_dev_secret" }],
+      "actions": ["Read", "Write", "List", "Tagging", "Admin"]
+    }
+  ]
+}

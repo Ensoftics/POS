@@ -1,0 +1,10 @@
+# Automatic HTTPS (Let's Encrypt) for APP_DOMAIN; everything goes to the web container,
+# which serves the app and proxies /api to the API.
+{
+	email {$ACME_EMAIL}
+}
+
+{$APP_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy web:8080
+}

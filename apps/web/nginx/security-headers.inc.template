@@ -1,0 +1,10 @@
+# Included by every location (nginx drops inherited add_header lines when a location adds its own).
+# Images: same origin, plus the bucket that signed image links redirect to (${IMAGE_ORIGIN}).
+# Forms: PayHere's hosted checkout (plan payments) is the only other target.
+add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: ${IMAGE_ORIGIN}; font-src 'self'; connect-src 'self'; form-action 'self' https://www.payhere.lk https://sandbox.payhere.lk; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; upgrade-insecure-requests" always;
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header X-Frame-Options "DENY" always;
+add_header Referrer-Policy "no-referrer" always;
+add_header Permissions-Policy "camera=(self), microphone=(), geolocation=(), payment=()" always;
+add_header Cross-Origin-Opener-Policy "same-origin" always;

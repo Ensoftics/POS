@@ -1,0 +1,53 @@
+{
+  "name": "ensoftic-pos",
+  "private": true,
+  "description": "Multi-tenant subscription POS platform for cosmetics, textile and general retail businesses.",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22.12.0 <23",
+    "pnpm": ">=9.15.0 <10"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --filter=@pos/api --filter=@pos/web",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:unit": "turbo run test:unit",
+    "test:e2e": "pnpm --filter @pos/web test:e2e",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "db:up": "docker compose -f infra/docker-compose.yml up -d --wait",
+    "db:down": "docker compose -f infra/docker-compose.yml down",
+    "db:migrate": "pnpm --filter @pos/api db:migrate",
+    "db:deploy": "pnpm --filter @pos/api db:deploy",
+    "db:test:deploy": "pnpm --filter @pos/api db:test:deploy",
+    "audit:prod": "pnpm audit --prod --audit-level moderate"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.12.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.13.0",
+    "prettier": "3.9.10",
+    "turbo": "2.11.8",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "js-yaml@>=5.0.0 <5.4.2": "5.4.2",
+      "deepmerge-ts@<8.0.0": "8.0.2"
+    },
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-w5hq-g745-h8pq",
+        "GHSA-86w9-cpqp-85rv",
+        "GHSA-vfj7-8cjw-p6xm",
+        "GHSA-hp3w-g68c-fv3c"
+      ]
+    }
+  }
+}

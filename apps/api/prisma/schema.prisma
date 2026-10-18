@@ -1,0 +1,1809 @@
+// Tenant isolation is enforced twice:
+//  1. Application code scopes every tenant query through PrismaService.withTenant().
+//  2. PostgreSQL row-level security (see migrations) rejects rows from other tenants
+//     because the API connects as the restricted `pos_app` role.
+// Tables with RLS: tenants, memberships, audit_logs, tenant_settings, branches, registers,
+// categories, products, product_variants, tax_rates, and every inventory/purchasing/sales table. Identity tables (users,
+// sessions, password_reset_tokens) are global and only reached through auth flows.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Migrations run as the schema owner; the API runtime uses the restricted role.
+  directUrl = env("MIGRATION_DATABASE_URL")
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  SUSPENDED
+  CANCELLED
+}
+
+enum BillingInterval {
+  MONTH
+  YEAR
+}
+
+enum BillingInvoiceStatus {
+  OPEN
+  PAID
+  VOID
+}
+
+enum BusinessType {
+  COSMETICS
+  TEXTILE
+  GENERAL_RETAIL
+}
+
+enum OnboardingStatus {
+  PENDING
+  COMPLETED
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum TenantRole {
+  OWNER
+  MANAGER
+  CASHIER
+  INVENTORY_STAFF
+}
+
+enum MembershipStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum ClientType {
+  WEB
+  MOBILE
+}
+
+enum Language {
+  en
+  si
+  ta
+}
+
+enum LocationStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum CatalogStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  ORDERED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+enum MovementType {
+  RECEIPT
+  ADJUSTMENT
+  TRANSFER_OUT
+  TRANSFER_IN
+  COUNT_CORRECTION
+  SALE
+  RETURN
+}
+
+enum SaleStatus {
+  COMPLETED
+}
+
+enum DiscountKind {
+  PERCENT
+  AMOUNT
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  BANK_TRANSFER
+  OTHER
+  ACCOUNT
+  /// Paid with the customer's loyalty points (online only).
+  LOYALTY
+}
+
+enum ReturnKind {
+  RETURN
+  VOID
+}
+
+/// Why an offline sale needs a manager's review after it synced.
+enum SaleConflictType {
+  PRICE_CHANGED
+  STOCK_SHORT
+  SHIFT_CLOSED
+  APPROVAL_MISSING
+  ITEM_ARCHIVED
+  CREDIT_LIMIT_EXCEEDED
+  EXPIRED_SOLD
+}
+
+enum ConsentSource {
+  /// Recorded by staff (in the shop, by phone).
+  STAFF
+  /// The customer used the opt-out link in a message.
+  UNSUBSCRIBE_LINK
+}
+
+enum MessageChannel {
+  EMAIL
+  SMS
+}
+
+enum CampaignStatus {
+  SENDING
+  DONE
+}
+
+enum DeliveryStatus {
+  QUEUED
+  SENT
+  FAILED
+  /// Not sent: consent withdrawn or contact detail removed after queueing.
+  SKIPPED
+}
+
+enum CustomerEntryType {
+  CHARGE
+  PAYMENT
+  REFUND
+}
+
+enum CashMovementType {
+  PAY_IN
+  PAY_OUT
+}
+
+enum ShiftStatus {
+  OPEN
+  CLOSED
+}
+
+enum AdjustmentReason {
+  DAMAGED
+  EXPIRED
+  LOST
+  THEFT
+  FOUND
+  RETURNED_TO_SUPPLIER
+  INTERNAL_USE
+  CORRECTION
+}
+
+enum TransferStatus {
+  IN_TRANSIT
+  RECEIVED
+  CANCELLED
+}
+
+enum CountStatus {
+  OPEN
+  COMPLETED
+  CANCELLED
+}
+
+enum SessionRevokeReason {
+  ROTATED
+  LOGOUT
+  LOGOUT_ALL
+  PASSWORD_RESET
+  REUSE_DETECTED
+  ADMIN
+}
+
+model Tenant {
+  id                    String           @id @default(uuid()) @db.Uuid
+  name                  String           @db.VarChar(120)
+  slug                  String           @unique @db.VarChar(48)
+  status                TenantStatus     @default(ACTIVE)
+  businessType          BusinessType?    @map("business_type")
+  contactPhone          String?          @map("contact_phone") @db.VarChar(32)
+  onboardingStatus      OnboardingStatus @default(PENDING) @map("onboarding_status")
+  onboardingCompletedAt DateTime?        @map("onboarding_completed_at") @db.Timestamptz(3)
+  createdAt             DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  memberships     Membership[]
+  auditLogs       AuditLog[]
+  settings        TenantSettings?
+  branches        Branch[]
+  registers       Register[]
+  categories      Category[]
+  products        Product[]
+  variants        ProductVariant[]
+  suppliers       Supplier[]
+  sequences       DocumentSequence[]
+  taxRates        TaxRate[]
+  customers       Customer[]
+  variantCosts    VariantCost[]
+  invitations     Invitation[]
+  devices         Device[]
+  subscription    Subscription?
+  billingInvoices BillingInvoice[]
+  paymentEvents   PaymentEvent[]
+  notifications   Notification[]
+  dailyRuns       DailyRun[]
+  featureFlags    TenantFeatureFlag[]
+  productImages   ProductImage[]
+  consentEvents   ConsentEvent[]
+  campaigns       MessageCampaign[]
+  deliveries      MessageDelivery[]
+
+  @@map("tenants")
+}
+
+model User {
+  id                String     @id @default(uuid()) @db.Uuid
+  /// Stored lower-cased and trimmed; uniqueness is global across tenants.
+  email             String     @unique @db.VarChar(254)
+  passwordHash      String     @map("password_hash") @db.VarChar(255)
+  fullName          String     @map("full_name") @db.VarChar(120)
+  status            UserStatus @default(ACTIVE)
+  isPlatformAdmin   Boolean    @default(false) @map("is_platform_admin")
+  /// Set once the person proved they own the address (link, invitation or password reset).
+  emailVerifiedAt   DateTime?  @map("email_verified_at") @db.Timestamptz(3)
+  /// Platform staff only: AES-256-GCM encrypted TOTP secret, and the last accepted time step (no replays).
+  totpSecretEnc     String?    @map("totp_secret_enc") @db.VarChar(255)
+  totpLastStep      Int?       @map("totp_last_step")
+  failedLoginCount  Int        @default(0) @map("failed_login_count")
+  lockedUntil       DateTime?  @map("locked_until") @db.Timestamptz(3)
+  passwordChangedAt DateTime   @default(now()) @map("password_changed_at") @db.Timestamptz(3)
+  lastLoginAt       DateTime?  @map("last_login_at") @db.Timestamptz(3)
+  createdAt         DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  memberships             Membership[]
+  passwordResetTokens     PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
+  platformSessions        PlatformSession[]
+  platformAuditLogs       PlatformAuditLog[]
+  notifications           Notification[]
+  auditLogs               AuditLog[]
+  purchaseOrders          PurchaseOrder[]
+  goodsReceipts           GoodsReceipt[]
+  stockAdjustments        StockAdjustment[]
+  stockTransfers          StockTransfer[]
+  stockCounts             StockCount[]
+  stockMovements          StockMovement[]
+  shiftsOpened            Shift[]                  @relation("ShiftOpenedBy")
+  shiftsClosed            Shift[]                  @relation("ShiftClosedBy")
+  sales                   Sale[]                   @relation("SaleCashier")
+  salesApproved           Sale[]                   @relation("SaleApprovedBy")
+  returnsCreated          SaleReturn[]             @relation("ReturnCashier")
+  returnsApproved         SaleReturn[]             @relation("ReturnApprovedBy")
+  cashMovements           CashMovement[]           @relation("CashMovementBy")
+  cashApproved            CashMovement[]           @relation("CashMovementApprovedBy")
+  conflictsResolved       SaleConflict[]           @relation("ConflictResolvedBy")
+  customerPayments        CustomerPayment[]
+  invitationsSent         Invitation[]
+  devicesRegistered       Device[]                 @relation("DeviceRegisteredBy")
+
+  @@map("users")
+}
+
+model Membership {
+  id                     String           @id @default(uuid()) @db.Uuid
+  tenantId               String           @map("tenant_id") @db.Uuid
+  userId                 String           @map("user_id") @db.Uuid
+  role                   TenantRole
+  status                 MembershipStatus @default(ACTIVE)
+  /// Optimistic concurrency for staff changes.
+  version                Int              @default(1)
+  /// scrypt hash of the manager's approval PIN (null: no PIN set). Never returned by the API.
+  approvalPinHash        String?          @map("approval_pin_hash") @db.VarChar(255)
+  approvalPinFailures    Int              @default(0) @map("approval_pin_failures")
+  approvalPinLockedUntil DateTime?        @map("approval_pin_locked_until") @db.Timestamptz(3)
+  /// Morning digest e-mail (stock alerts, daily summary). In-app notifications are always on.
+  emailDigest            Boolean          @default(true) @map("email_digest")
+  createdAt              DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant             @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  user     User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  sessions Session[]
+  branches MembershipBranch[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, userId])
+  @@index([userId])
+  @@map("memberships")
+}
+
+/// One row per issued refresh token. Rotation creates a new row in the same
+/// family; presenting an already-rotated token revokes the whole family.
+model Session {
+  id               String               @id @default(uuid()) @db.Uuid
+  membershipId     String               @map("membership_id") @db.Uuid
+  familyId         String               @map("family_id") @db.Uuid
+  /// SHA-256 of the opaque refresh token; the token itself is never stored.
+  refreshTokenHash String               @unique @map("refresh_token_hash") @db.Char(64)
+  clientType       ClientType           @map("client_type")
+  deviceName       String?              @map("device_name") @db.VarChar(100)
+  /// The till this session signed in on (Android); revoking the device revokes its sessions.
+  deviceId         String?              @map("device_id") @db.Uuid
+  userAgent        String?              @map("user_agent") @db.VarChar(255)
+  ip               String?              @db.VarChar(64)
+  expiresAt        DateTime             @map("expires_at") @db.Timestamptz(3)
+  familyExpiresAt  DateTime             @map("family_expires_at") @db.Timestamptz(3)
+  revokedAt        DateTime?            @map("revoked_at") @db.Timestamptz(3)
+  revokedReason    SessionRevokeReason? @map("revoked_reason")
+  replacedById     String?              @map("replaced_by_id") @db.Uuid
+  createdAt        DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@index([membershipId])
+  @@index([familyId])
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  /// SHA-256 of the emailed token.
+  tokenHash   String    @unique @map("token_hash") @db.Char(64)
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(3)
+  usedAt      DateTime? @map("used_at") @db.Timestamptz(3)
+  invalidated Boolean   @default(false)
+  requestIp   String?   @map("request_ip") @db.VarChar(64)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("password_reset_tokens")
+}
+
+/// Append-only: the application role is denied UPDATE and DELETE in the migration.
+/// tenant_id is NULL for platform-level security events (e.g. failed logins).
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String?  @map("tenant_id") @db.Uuid
+  actorUserId String?  @map("actor_user_id") @db.Uuid
+  action      String   @db.VarChar(100)
+  entityType  String?  @map("entity_type") @db.VarChar(60)
+  entityId    String?  @map("entity_id") @db.VarChar(64)
+  metadata    Json?
+  ip          String?  @db.VarChar(64)
+  userAgent   String?  @map("user_agent") @db.VarChar(255)
+  requestId   String?  @map("request_id") @db.VarChar(64)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  actor  User?   @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([actorUserId])
+  @@map("audit_logs")
+}
+
+/// One row per tenant. `version` implements optimistic concurrency for edits.
+model TenantSettings {
+  tenantId                  String     @id @map("tenant_id") @db.Uuid
+  version                   Int        @default(1)
+  legalName                 String?    @map("legal_name") @db.VarChar(160)
+  taxRegistrationNumber     String?    @map("tax_registration_number") @db.VarChar(40)
+  addressLine1              String?    @map("address_line1") @db.VarChar(160)
+  addressLine2              String?    @map("address_line2") @db.VarChar(160)
+  city                      String?    @db.VarChar(80)
+  postalCode                String?    @map("postal_code") @db.VarChar(16)
+  country                   String     @default("LK") @db.Char(2)
+  /// ISO 4217 code; validated against the domain catalogue.
+  currency                  String     @default("LKR") @db.Char(3)
+  /// IANA timezone used for business days, shifts and reports.
+  timezone                  String     @default("Asia/Colombo") @db.VarChar(64)
+  defaultLanguage           Language   @default(en) @map("default_language")
+  enabledLanguages          Language[] @default([en, si, ta]) @map("enabled_languages")
+  trackBatchNumbers         Boolean    @default(false) @map("track_batch_numbers")
+  trackExpiryDates          Boolean    @default(false) @map("track_expiry_dates")
+  allowFractionalQuantities Boolean    @default(false) @map("allow_fractional_quantities")
+  variantAttributes         String[]   @default([]) @map("variant_attributes")
+  defaultUnits              String[]   @default(["piece"]) @map("default_units")
+  /// Shelf prices contain tax (extracted on receipts) rather than tax being added at the till.
+  pricesIncludeTax          Boolean    @default(true) @map("prices_include_tax")
+  /// When false (default), a sale that needs more stock than recorded is refused.
+  allowNegativeStock        Boolean    @default(false) @map("allow_negative_stock")
+  receiptFooter             String?    @map("receipt_footer") @db.VarChar(300)
+  /// Discounts above this share of the subtotal (basis points) need a manager's approval; null = never.
+  discountApprovalBp        Int?       @map("discount_approval_bp")
+  /// Returns and refunds need a manager's approval (voids and pay-outs always do).
+  refundsRequireApproval    Boolean    @default(true) @map("refunds_require_approval")
+  /// Loyalty programme: off until the owner switches it on.
+  loyaltyEnabled            Boolean    @default(false) @map("loyalty_enabled")
+  /// Amount spent (minor units) for one point, e.g. 10000 = 1 point per LKR 100.
+  loyaltySpendPerPointMinor Int        @default(10000) @map("loyalty_spend_per_point_minor")
+  /// What one point is worth when paying with points (minor units), e.g. 100 = LKR 1.
+  loyaltyPointValueMinor    Int        @default(100) @map("loyalty_point_value_minor")
+  /// Fewest points that can be used in one sale.
+  loyaltyMinRedeemPoints    Int        @default(0) @map("loyalty_min_redeem_points")
+  createdAt                 DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                 DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@map("tenant_settings")
+}
+
+model Branch {
+  id           String         @id @default(uuid()) @db.Uuid
+  tenantId     String         @map("tenant_id") @db.Uuid
+  /// Short code printed on receipts; unique per tenant (stored upper-case).
+  code         String         @db.VarChar(12)
+  name         String         @db.VarChar(80)
+  addressLine1 String?        @map("address_line1") @db.VarChar(160)
+  city         String?        @db.VarChar(80)
+  phone        String?        @db.VarChar(32)
+  status       LocationStatus @default(ACTIVE)
+  version      Int            @default(1)
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  registers Register[]
+
+  purchaseOrders   PurchaseOrder[]
+  goodsReceipts    GoodsReceipt[]
+  stockLevels      StockLevel[]
+  stockMovements   StockMovement[]
+  stockAdjustments StockAdjustment[]
+  transfersOut     StockTransfer[]    @relation("TransferFrom")
+  transfersIn      StockTransfer[]    @relation("TransferTo")
+  stockCounts      StockCount[]
+  shifts           Shift[]
+  sales            Sale[]
+  saleReturns      SaleReturn[]
+  staff            MembershipBranch[]
+  devices          Device[]
+
+  @@unique([tenantId, code])
+  /// Target of the tenant-scoped composite foreign key from registers.
+  @@unique([tenantId, id])
+  @@index([tenantId, status])
+  @@map("branches")
+}
+
+model Register {
+  id        String         @id @default(uuid()) @db.Uuid
+  tenantId  String         @map("tenant_id") @db.Uuid
+  branchId  String         @map("branch_id") @db.Uuid
+  /// Unique within its branch (stored upper-case).
+  code      String         @db.VarChar(12)
+  name      String         @db.VarChar(80)
+  status    LocationStatus @default(ACTIVE)
+  version   Int            @default(1)
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  /// Composite key: a register can only reference a branch of the same tenant.
+  branch      Branch       @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  shifts      Shift[]
+  sales       Sale[]
+  saleReturns SaleReturn[]
+  devices     Device[]
+
+  @@unique([tenantId, branchId, code])
+  /// Target of composite keys that also prove the register belongs to the branch.
+  @@unique([tenantId, branchId, id])
+  @@index([tenantId, branchId])
+  @@map("registers")
+}
+
+/// Product categories, at most two levels (a parent must itself be top-level).
+model Category {
+  id        String        @id @default(uuid()) @db.Uuid
+  tenantId  String        @map("tenant_id") @db.Uuid
+  parentId  String?       @map("parent_id") @db.Uuid
+  /// Unique per tenant and parent, case-insensitively (index in migration SQL).
+  name      String        @db.VarChar(60)
+  status    CatalogStatus @default(ACTIVE)
+  version   Int           @default(1)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant     @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  parent   Category?  @relation("CategoryTree", fields: [tenantId, parentId], references: [tenantId, id], onDelete: Restrict)
+  children Category[] @relation("CategoryTree")
+  products Product[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, status])
+  @@map("categories")
+}
+
+/// A product family. Sellable items are its variants (at least one).
+model Product {
+  id          String        @id @default(uuid()) @db.Uuid
+  tenantId    String        @map("tenant_id") @db.Uuid
+  categoryId  String?       @map("category_id") @db.Uuid
+  name        String        @db.VarChar(120)
+  brand       String?       @db.VarChar(60)
+  description String?       @db.VarChar(1000)
+  /// UnitCode from @pos/domain (piece, metre, kilogram, ...).
+  unit        String        @db.VarChar(16)
+  /// NULL: the tenant's default tax rate applies (or no tax when there is none).
+  taxRateId   String?       @map("tax_rate_id") @db.Uuid
+  status      CatalogStatus @default(ACTIVE)
+  version     Int           @default(1)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  category Category?        @relation(fields: [tenantId, categoryId], references: [tenantId, id], onDelete: Restrict)
+  taxRate  TaxRate?         @relation(fields: [tenantId, taxRateId], references: [tenantId, id], onDelete: Restrict)
+  variants ProductVariant[]
+  images   ProductImage[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, status, name, id])
+  @@index([tenantId, categoryId])
+  /// Catalogue delta sync for offline devices.
+  @@index([tenantId, updatedAt], map: "products_tenant_updated_idx")
+  /// Substring search on names (pg_trgm).
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "products_name_trgm_idx")
+  @@map("products")
+}
+
+model ProductVariant {
+  id            String        @id @default(uuid()) @db.Uuid
+  tenantId      String        @map("tenant_id") @db.Uuid
+  productId     String        @map("product_id") @db.Uuid
+  /// Upper-case; unique per tenant including archived variants.
+  sku           String        @db.VarChar(40)
+  /// Stored as scanned; unique per tenant including archived variants.
+  barcode       String?       @db.VarChar(48)
+  /// e.g. {"shade":"Ruby 01"}; keys limited to the tenant's enabled variant attributes.
+  attributes    Json          @default("{}")
+  /// Canonical form of `attributes`, unique within a product.
+  attributesKey String        @map("attributes_key") @db.VarChar(400)
+  /// Selling price in minor units of the tenant currency.
+  priceMinor    BigInt        @map("price_minor")
+  /// Default/standard cost in minor units (purchase costs arrive with receiving in Slice 4).
+  costMinor     BigInt?       @map("cost_minor")
+  packSize      Int?          @map("pack_size")
+  reorderLevel  Decimal?      @map("reorder_level") @db.Decimal(12, 3)
+  status        CatalogStatus @default(ACTIVE)
+  version       Int           @default(1)
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+
+  batches            StockBatch[]
+  levels             StockLevel[]
+  movements          StockMovement[]
+  purchaseOrderLines PurchaseOrderLine[]
+  receiptLines       GoodsReceiptLine[]
+  adjustmentLines    StockAdjustmentLine[]
+  transferLines      StockTransferLine[]
+  countLines         StockCountLine[]
+  saleLines          SaleLine[]
+  cost               VariantCost?
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, sku])
+  @@unique([tenantId, barcode])
+  @@unique([productId, attributesKey])
+  @@index([tenantId, productId])
+  /// Catalogue delta sync for offline devices.
+  @@index([tenantId, updatedAt, id], map: "product_variants_tenant_updated_idx")
+  /// Prefix search on SKUs (LIKE 'ABC%').
+  @@index([tenantId, sku(ops: raw("varchar_pattern_ops"))], map: "product_variants_sku_prefix_idx")
+  @@map("product_variants")
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Slice 4: purchasing and inventory
+ * -------------------------------------------------------------------------
+ */
+
+/// Gapless per-tenant document numbers (PO-000001, GRN-000001, ...).
+model DocumentSequence {
+  tenantId  String @map("tenant_id") @db.Uuid
+  kind      String @db.VarChar(20)
+  nextValue Int    @default(1) @map("next_value")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@id([tenantId, kind])
+  @@map("document_sequences")
+}
+
+model Supplier {
+  id          String        @id @default(uuid()) @db.Uuid
+  tenantId    String        @map("tenant_id") @db.Uuid
+  /// Unique per tenant, case-insensitively (index in migration SQL).
+  name        String        @db.VarChar(120)
+  contactName String?       @map("contact_name") @db.VarChar(120)
+  phone       String?       @db.VarChar(32)
+  email       String?       @db.VarChar(254)
+  address     String?       @db.VarChar(300)
+  taxNumber   String?       @map("tax_number") @db.VarChar(40)
+  notes       String?       @db.VarChar(1000)
+  status      CatalogStatus @default(ACTIVE)
+  version     Int           @default(1)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  purchaseOrders PurchaseOrder[]
+  goodsReceipts  GoodsReceipt[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, status, name])
+  @@map("suppliers")
+}
+
+model PurchaseOrder {
+  id           String              @id @default(uuid()) @db.Uuid
+  tenantId     String              @map("tenant_id") @db.Uuid
+  number       String              @db.VarChar(20)
+  supplierId   String              @map("supplier_id") @db.Uuid
+  branchId     String              @map("branch_id") @db.Uuid
+  status       PurchaseOrderStatus @default(DRAFT)
+  expectedDate DateTime?           @map("expected_date") @db.Date
+  notes        String?             @db.VarChar(1000)
+  version      Int                 @default(1)
+  createdById  String?             @map("created_by_id") @db.Uuid
+  createdAt    DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  orderedAt    DateTime?           @map("ordered_at") @db.Timestamptz(3)
+
+  supplier  Supplier            @relation(fields: [tenantId, supplierId], references: [tenantId, id], onDelete: Restrict)
+  branch    Branch              @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  createdBy User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  lines     PurchaseOrderLine[]
+  receipts  GoodsReceipt[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, number])
+  @@index([tenantId, status, createdAt])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderLine {
+  id               String  @id @default(uuid()) @db.Uuid
+  tenantId         String  @map("tenant_id") @db.Uuid
+  purchaseOrderId  String  @map("purchase_order_id") @db.Uuid
+  variantId        String  @map("variant_id") @db.Uuid
+  position         Int
+  quantityOrdered  Decimal @map("quantity_ordered") @db.Decimal(12, 3)
+  quantityReceived Decimal @default(0) @map("quantity_received") @db.Decimal(12, 3)
+  unitCostMinor    BigInt  @map("unit_cost_minor")
+
+  purchaseOrder PurchaseOrder  @relation(fields: [tenantId, purchaseOrderId], references: [tenantId, id], onDelete: Cascade)
+  variant       ProductVariant @relation(fields: [tenantId, variantId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([purchaseOrderId, variantId])
+  @@map("purchase_order_lines")
+}
+
+/// A batch/lot of one variant, optionally with an expiry date.
+model StockBatch {
+  id          String    @id @default(uuid()) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  variantId   String    @map("variant_id") @db.Uuid
+  batchNumber String    @map("batch_number") @db.VarChar(40)
+  expiryDate  DateTime? @map("expiry_date") @db.Date
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  variant         ProductVariant        @relation(fields: [tenantId, variantId], references: [tenantId, id], onDelete: Restrict)
+  levels          StockLevel[]
+  movements       StockMovement[]
+  receiptLines    GoodsReceiptLine[]
+  adjustmentLines StockAdjustmentLine[]
+  transferLines   StockTransferLine[]
+  countLines      StockCountLine[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, variantId, batchNumber])
+  @@map("stock_batches")
+}
+
+/// Current balance per branch, variant and batch. Changed only together with a
+/// stock_movements row, through StockLedger; never edited directly.
+model StockLevel {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  branchId  String   @map("branch_id") @db.Uuid
+  variantId String   @map("variant_id") @db.Uuid
+  batchId   String?  @map("batch_id") @db.Uuid
+  quantity  Decimal  @default(0) @db.Decimal(12, 3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  branch  Branch         @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  variant ProductVariant @relation(fields: [tenantId, variantId], references: [tenantId, id], onDelete: Restrict)
+  batch   StockBatch?    @relation(fields: [tenantId, batchId], references: [tenantId, id], onDelete: Restrict)
+
+  /// NULLS NOT DISTINCT in SQL (one row per branch/variant/batch, "no batch" included).
+  @@unique([tenantId, branchId, variantId, batchId], map: "stock_levels_branch_variant_batch_key")
+  @@index([tenantId, branchId, variantId])
+  @@map("stock_levels")
+}
+
+/// Append-only stock ledger: every change to stock_levels has exactly one row here.
+model StockMovement {
+  id              String            @id @default(uuid()) @db.Uuid
+  tenantId        String            @map("tenant_id") @db.Uuid
+  branchId        String            @map("branch_id") @db.Uuid
+  variantId       String            @map("variant_id") @db.Uuid
+  batchId         String?           @map("batch_id") @db.Uuid
+  type            MovementType
+  quantity        Decimal           @db.Decimal(12, 3)
+  balanceAfter    Decimal           @map("balance_after") @db.Decimal(12, 3)
+  unitCostMinor   BigInt?           @map("unit_cost_minor")
+  /// Total cost of goods leaving (SALE) or coming back (RETURN), at the moving average cost.
+  costMinor       BigInt?           @map("cost_minor")
+  reason          AdjustmentReason?
+  referenceType   String            @map("reference_type") @db.VarChar(30)
+  referenceId     String            @map("reference_id") @db.Uuid
+  referenceNumber String?           @map("reference_number") @db.VarChar(20)
+  actorUserId     String?           @map("actor_user_id") @db.Uuid
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  branch  Branch         @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  variant ProductVariant @relation(fields: [tenantId, variantId], references: [tenantId, id], onDelete: Restrict)
+  batch   StockBatch?    @relation(fields: [tenantId, batchId], references: [tenantId, id], onDelete: Restrict)
+  actor   User?          @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, variantId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([tenantId, branchId, createdAt(sort: Desc)])
+  @@index([tenantId, referenceType, referenceId])
+  @@map("stock_movements")
+}
+
+model GoodsReceipt {
+  id                String   @id @db.Uuid
+  tenantId          String   @map("tenant_id") @db.Uuid
+  number            String   @db.VarChar(20)
+  branchId          String   @map("branch_id") @db.Uuid
+  supplierId        String?  @map("supplier_id") @db.Uuid
+  purchaseOrderId   String?  @map("purchase_order_id") @db.Uuid
+  supplierReference String?  @map("supplier_reference") @db.VarChar(60)
+  notes             String?  @db.VarChar(1000)
+  createdById       String?  @map("created_by_id") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  branch        Branch             @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  supplier      Supplier?          @relation(fields: [tenantId, supplierId], references: [tenantId, id], onDelete: Restrict)
+  purchaseOrder PurchaseOrder?     @relation(fields: [tenantId, purchaseOrderId], references: [tenantId, id], onDelete: Restrict)
+  createdBy     User?              @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  lines         GoodsReceiptLine[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, number])
+  @@index([tenantId, createdAt])
+  @@map("goods_receipts")
+}
+
+model GoodsReceiptLine {
+  id            String  @id @default(uuid()) @db.Uuid
+  tenantId      String  @map("tenant_id") @db.Uuid
+  receiptId     String  @map("receipt_id") @db.Uuid
+  variantId     String  @map("variant_id") @db.Uuid
+  batchId       String? @map("batch_id") @db.Uuid
+  position      Int
+  quantity      Decimal @db.Decimal(12, 3)
+  unitCostMinor BigInt  @map("unit_cost_minor")
+
+  receipt GoodsReceipt   @relation(fields: [tenantId, receiptId], references: [tenantId, id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [tenantId, variantId], references: [tenantId, id], onDelete: Restrict)
+  batch   StockBatch?    @relation(fields: [tenantId, batchId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId, receiptId])
+  @@map("goods_receipt_lines")
+}
+
+model StockAdjustment {
+  id          String           @id @db.Uuid
+  tenantId    String           @map("tenant_id") @db.Uuid
+  number      String           @db.VarChar(20)
+  branchId    String           @map("branch_id") @db.Uuid
+  reason      AdjustmentReason
+  notes       String?          @db.VarChar(1000)
+  createdById String?          @map("created_by_id") @db.Uuid
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  branch    Branch                @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  createdBy User?                 @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  lines     StockAdjustmentLine[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, number])
+  @@index([tenantId, createdAt])
+  @@map("stock_adjustments")
+}
+
+model StockAdjustmentLine {
+  id           String  @id @default(uuid()) @db.Uuid
+  tenantId     String  @map("tenant_id") @db.Uuid
+  adjustmentId String  @map("adjustment_id") @db.Uuid
+  variantId    String  @map("variant_id") @db.Uuid
+  batchId      String? @map("batch_id") @db.Uuid
+  position     Int
+  quantity     Decimal @db.Decimal(12, 3)
+
+  adjustment StockAdjustment @relation(fields: [tenantId, adjustmentId], references: [tenantId, id], onDelete: Cascade)
+  variant    ProductVariant  @relation(fields: [tenantId, variantId], references: [tenantId, id], onDelete: Restrict)
+  batch      StockBatch?     @relation(fields: [tenantId, batchId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId, adjustmentId])
+  @@map("stock_adjustment_lines")
+}
+
+model StockTransfer {
+  id           String         @id @db.Uuid
+  tenantId     String         @map("tenant_id") @db.Uuid
+  number       String         @db.VarChar(20)
+  fromBranchId String         @map("from_branch_id") @db.Uuid
+  toBranchId   String         @map("to_branch_id") @db.Uuid
+  status       TransferStatus @default(IN_TRANSIT)
+  notes        String?        @db.VarChar(1000)
+  version      Int            @default(1)
+  createdById  String?        @map("created_by_id") @db.Uuid
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  receivedAt   DateTime?      @map("received_at") @db.Timestamptz(3)
+  cancelledAt  DateTime?      @map("cancelled_at") @db.Timestamptz(3)
+
+  fromBranch Branch              @relation("TransferFrom", fields: [tenantId, fromBranchId], references: [tenantId, id], onDelete: Restrict)
+  toBranch   Branch              @relation("TransferTo", fields: [tenantId, toBranchId], references: [tenantId, id], onDelete: Restrict)
+  createdBy  User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  lines      StockTransferLine[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, number])
+  @@index([tenantId, status, createdAt])
+  @@map("stock_transfers")
+}
+
+model StockTransferLine {
+  id         String  @id @default(uuid()) @db.Uuid
+  tenantId   String  @map("tenant_id") @db.Uuid
+  transferId String  @map("transfer_id") @db.Uuid
+  variantId  String  @map("variant_id") @db.Uuid
+  batchId    String? @map("batch_id") @db.Uuid
+  position   Int
+  quantity   Decimal @db.Decimal(12, 3)
+
+  transfer StockTransfer  @relation(fields: [tenantId, transferId], references: [tenantId, id], onDelete: Cascade)
+  variant  ProductVariant @relation(fields: [tenantId, variantId], references: [tenantId, id], onDelete: Restrict)
+  batch    StockBatch?    @relation(fields: [tenantId, batchId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId, transferId])
+  @@map("stock_transfer_lines")
+}
+
+model StockCount {
+  id          String      @id @default(uuid()) @db.Uuid
+  tenantId    String      @map("tenant_id") @db.Uuid
+  number      String      @db.VarChar(20)
+  branchId    String      @map("branch_id") @db.Uuid
+  status      CountStatus @default(OPEN)
+  notes       String?     @db.VarChar(1000)
+  version     Int         @default(1)
+  createdById String?     @map("created_by_id") @db.Uuid
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  completedAt DateTime?   @map("completed_at") @db.Timestamptz(3)
+
+  branch    Branch           @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  createdBy User?            @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  lines     StockCountLine[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, number])
+  @@index([tenantId, status, createdAt])
+  @@map("stock_counts")
+}
+
+model StockCountLine {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  countId          String   @map("count_id") @db.Uuid
+  variantId        String   @map("variant_id") @db.Uuid
+  batchId          String?  @map("batch_id") @db.Uuid
+  expectedQuantity Decimal  @map("expected_quantity") @db.Decimal(12, 3)
+  countedQuantity  Decimal? @map("counted_quantity") @db.Decimal(12, 3)
+  varianceQuantity Decimal? @map("variance_quantity") @db.Decimal(12, 3)
+
+  count   StockCount     @relation(fields: [tenantId, countId], references: [tenantId, id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [tenantId, variantId], references: [tenantId, id], onDelete: Restrict)
+  batch   StockBatch?    @relation(fields: [tenantId, batchId], references: [tenantId, id], onDelete: Restrict)
+
+  /// NULLS NOT DISTINCT in SQL.
+  @@unique([countId, variantId, batchId], map: "stock_count_lines_item_key")
+  @@index([tenantId, countId])
+  @@map("stock_count_lines")
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Slice 5: checkout
+ * -------------------------------------------------------------------------
+ */
+
+/// Configurable tax rates (never hard-coded). Sales copy the name and rate, so
+/// later changes never alter past receipts.
+model TaxRate {
+  id        String        @id @default(uuid()) @db.Uuid
+  tenantId  String        @map("tenant_id") @db.Uuid
+  /// Unique per tenant, case-insensitively (index in migration SQL).
+  name      String        @db.VarChar(60)
+  /// Basis points: 1800 = 18 %.
+  rateBp    Int           @map("rate_bp")
+  /// At most one default per tenant (partial unique index in migration SQL).
+  isDefault Boolean       @default(false) @map("is_default")
+  status    CatalogStatus @default(ACTIVE)
+  version   Int           @default(1)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  products Product[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, status])
+  @@map("tax_rates")
+}
+
+/// A cashier session on one register, from opening float to cash count.
+model Shift {
+  id                String      @id @default(uuid()) @db.Uuid
+  tenantId          String      @map("tenant_id") @db.Uuid
+  number            String      @db.VarChar(20)
+  branchId          String      @map("branch_id") @db.Uuid
+  registerId        String      @map("register_id") @db.Uuid
+  status            ShiftStatus @default(OPEN)
+  openingFloatMinor BigInt      @map("opening_float_minor")
+  openedById        String      @map("opened_by_id") @db.Uuid
+  openedAt          DateTime    @default(now()) @map("opened_at") @db.Timestamptz(3)
+  closedById        String?     @map("closed_by_id") @db.Uuid
+  closedAt          DateTime?   @map("closed_at") @db.Timestamptz(3)
+  expectedCashMinor BigInt?     @map("expected_cash_minor")
+  countedCashMinor  BigInt?     @map("counted_cash_minor")
+  closingNotes      String?     @map("closing_notes") @db.VarChar(1000)
+  version           Int         @default(1)
+
+  branch           Branch            @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  register         Register          @relation(fields: [tenantId, branchId, registerId], references: [tenantId, branchId, id], onDelete: Restrict)
+  openedBy         User              @relation("ShiftOpenedBy", fields: [openedById], references: [id], onDelete: Restrict)
+  closedBy         User?             @relation("ShiftClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+  sales            Sale[]
+  saleReturns      SaleReturn[]
+  cashMovements    CashMovement[]
+  customerPayments CustomerPayment[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, number])
+  @@index([tenantId, status, openedAt])
+  @@index([tenantId, registerId, openedAt])
+  @@map("shifts")
+}
+
+/// A completed sale. The id is generated by the till, so a retried submission
+/// returns the original sale instead of charging twice.
+model Sale {
+  id                  String        @id @db.Uuid
+  tenantId            String        @map("tenant_id") @db.Uuid
+  number              String        @db.VarChar(20)
+  branchId            String        @map("branch_id") @db.Uuid
+  registerId          String        @map("register_id") @db.Uuid
+  shiftId             String        @map("shift_id") @db.Uuid
+  cashierId           String?       @map("cashier_id") @db.Uuid
+  status              SaleStatus    @default(COMPLETED)
+  currency            String        @db.Char(3)
+  pricesIncludeTax    Boolean       @map("prices_include_tax")
+  discountKind        DiscountKind? @map("discount_kind")
+  discountValue       BigInt?       @map("discount_value")
+  subtotalMinor       BigInt        @map("subtotal_minor")
+  discountMinor       BigInt        @map("discount_minor")
+  taxMinor            BigInt        @map("tax_minor")
+  totalMinor          BigInt        @map("total_minor")
+  paidMinor           BigInt        @map("paid_minor")
+  changeMinor         BigInt        @map("change_minor")
+  notes               String?       @db.VarChar(500)
+  /// SHA-256 of the submitted request, to tell a retry from a different sale reusing an id.
+  requestHash         String        @map("request_hash") @db.Char(64)
+  /// Manager who approved a discount above the tenant's limit.
+  approvedById        String?       @map("approved_by_id") @db.Uuid
+  /// Recorded on a till without a connection and synced later (createdAt is then the till's time).
+  capturedOffline     Boolean       @default(false) @map("captured_offline")
+  /// When the server received an offline sale.
+  syncedAt            DateTime?     @map("synced_at") @db.Timestamptz(3)
+  /// Optional: the customer the sale was made to (required for payments on account).
+  customerId          String?       @map("customer_id") @db.Uuid
+  /// Loyalty points earned on this sale, and points used to pay (with what they were worth).
+  pointsEarned        Int           @default(0) @map("points_earned")
+  pointsRedeemed      Int           @default(0) @map("points_redeemed")
+  pointsRedeemedMinor BigInt        @default(0) @map("points_redeemed_minor")
+  createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  approvedBy User?          @relation("SaleApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  returns    SaleReturn[]
+  conflicts  SaleConflict[]
+  customer   Customer?      @relation(fields: [tenantId, customerId], references: [tenantId, id], onDelete: Restrict)
+  branch     Branch         @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  register   Register       @relation(fields: [tenantId, branchId, registerId], references: [tenantId, branchId, id], onDelete: Restrict)
+  shift      Shift          @relation(fields: [tenantId, shiftId], references: [tenantId, id], onDelete: Restrict)
+  cashier    User?          @relation("SaleCashier", fields: [cashierId], references: [id], onDelete: SetNull)
+  lines      SaleLine[]
+  payments   SalePayment[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, number])
+  @@index([tenantId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([tenantId, customerId, createdAt(sort: Desc)])
+  @@index([tenantId, shiftId])
+  @@map("sales")
+}
+
+/// Sold item with a snapshot of its name, price and tax at the time of sale.
+model SaleLine {
+  id                String        @id @default(uuid()) @db.Uuid
+  tenantId          String        @map("tenant_id") @db.Uuid
+  saleId            String        @map("sale_id") @db.Uuid
+  position          Int
+  variantId         String        @map("variant_id") @db.Uuid
+  productName       String        @map("product_name") @db.VarChar(120)
+  sku               String        @db.VarChar(40)
+  variantLabel      String        @map("variant_label") @db.VarChar(400)
+  unit              String        @db.VarChar(16)
+  quantity          Decimal       @db.Decimal(12, 3)
+  unitPriceMinor    BigInt        @map("unit_price_minor")
+  discountKind      DiscountKind? @map("discount_kind")
+  discountValue     BigInt?       @map("discount_value")
+  lineDiscountMinor BigInt        @map("line_discount_minor")
+  cartDiscountMinor BigInt        @map("cart_discount_minor")
+  taxRateId         String?       @map("tax_rate_id") @db.Uuid
+  taxName           String?       @map("tax_name") @db.VarChar(60)
+  taxRateBp         Int           @map("tax_rate_bp")
+  taxMinor          BigInt        @map("tax_minor")
+  totalMinor        BigInt        @map("total_minor")
+  /// Copied from the sale (a trigger enforces it) so reports read lines by date
+  /// without visiting every sale; never changes, like the sale itself.
+  createdAt         DateTime      @map("created_at") @db.Timestamptz(3)
+  branchId          String        @map("branch_id") @db.Uuid
+
+  sale        Sale             @relation(fields: [tenantId, saleId], references: [tenantId, id], onDelete: Cascade)
+  variant     ProductVariant   @relation(fields: [tenantId, variantId], references: [tenantId, id], onDelete: Restrict)
+  returnLines SaleReturnLine[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, saleId])
+  @@index([tenantId, variantId])
+  /// Reports by date range (product, category, tax, profit, dashboard).
+  @@index([tenantId, createdAt])
+  @@map("sale_lines")
+}
+
+/// One tender of a sale. Card payments keep only an optional terminal reference,
+/// never card numbers.
+model SalePayment {
+  id          String        @id @default(uuid()) @db.Uuid
+  tenantId    String        @map("tenant_id") @db.Uuid
+  saleId      String        @map("sale_id") @db.Uuid
+  position    Int
+  method      PaymentMethod
+  amountMinor BigInt        @map("amount_minor")
+  reference   String?       @db.VarChar(40)
+
+  sale Sale @relation(fields: [tenantId, saleId], references: [tenantId, id], onDelete: Cascade)
+
+  @@index([tenantId, saleId])
+  @@map("sale_payments")
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Slice 6: returns, voids, approvals and cash movements
+ * -------------------------------------------------------------------------
+ */
+
+/// A return or void of (part of) a sale. Sales are never edited; their returned
+/// state is derived from these records.
+model SaleReturn {
+  id           String     @id @db.Uuid
+  tenantId     String     @map("tenant_id") @db.Uuid
+  number       String     @db.VarChar(20)
+  kind         ReturnKind
+  saleId       String     @map("sale_id") @db.Uuid
+  /// The shift (and so the drawer) the refund was paid from.
+  shiftId      String     @map("shift_id") @db.Uuid
+  branchId     String     @map("branch_id") @db.Uuid
+  registerId   String     @map("register_id") @db.Uuid
+  cashierId    String?    @map("cashier_id") @db.Uuid
+  approvedById String?    @map("approved_by_id") @db.Uuid
+  reason       String     @db.VarChar(200)
+  refundMinor  BigInt     @map("refund_minor")
+  taxMinor     BigInt     @map("tax_minor")
+  requestHash  String     @map("request_hash") @db.Char(64)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  sale       Sale               @relation(fields: [tenantId, saleId], references: [tenantId, id], onDelete: Restrict)
+  shift      Shift              @relation(fields: [tenantId, shiftId], references: [tenantId, id], onDelete: Restrict)
+  branch     Branch             @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  register   Register           @relation(fields: [tenantId, branchId, registerId], references: [tenantId, branchId, id], onDelete: Restrict)
+  cashier    User?              @relation("ReturnCashier", fields: [cashierId], references: [id], onDelete: SetNull)
+  approvedBy User?              @relation("ReturnApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  lines      SaleReturnLine[]
+  refunds    SaleReturnRefund[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, number])
+  @@index([tenantId, saleId])
+  @@index([tenantId, shiftId])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("sale_returns")
+}
+
+model SaleReturnLine {
+  id          String  @id @default(uuid()) @db.Uuid
+  tenantId    String  @map("tenant_id") @db.Uuid
+  returnId    String  @map("return_id") @db.Uuid
+  saleLineId  String  @map("sale_line_id") @db.Uuid
+  position    Int
+  quantity    Decimal @db.Decimal(12, 3)
+  /// False for items that cannot be resold (damaged): no stock comes back.
+  restock     Boolean
+  refundMinor BigInt  @map("refund_minor")
+  taxMinor    BigInt  @map("tax_minor")
+
+  saleReturn SaleReturn @relation(fields: [tenantId, returnId], references: [tenantId, id], onDelete: Cascade)
+  saleLine   SaleLine   @relation(fields: [tenantId, saleLineId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId, returnId])
+  @@index([tenantId, saleLineId])
+  @@map("sale_return_lines")
+}
+
+model SaleReturnRefund {
+  id          String        @id @default(uuid()) @db.Uuid
+  tenantId    String        @map("tenant_id") @db.Uuid
+  returnId    String        @map("return_id") @db.Uuid
+  position    Int
+  method      PaymentMethod
+  amountMinor BigInt        @map("amount_minor")
+  reference   String?       @db.VarChar(40)
+
+  saleReturn SaleReturn @relation(fields: [tenantId, returnId], references: [tenantId, id], onDelete: Cascade)
+
+  @@index([tenantId, returnId])
+  @@map("sale_return_refunds")
+}
+
+/// Cash put into or taken out of the drawer during a shift (not a sale or refund).
+model CashMovement {
+  id           String           @id @db.Uuid
+  tenantId     String           @map("tenant_id") @db.Uuid
+  shiftId      String           @map("shift_id") @db.Uuid
+  type         CashMovementType
+  amountMinor  BigInt           @map("amount_minor")
+  reason       String           @db.VarChar(200)
+  createdById  String?          @map("created_by_id") @db.Uuid
+  approvedById String?          @map("approved_by_id") @db.Uuid
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  shift      Shift @relation(fields: [tenantId, shiftId], references: [tenantId, id], onDelete: Restrict)
+  createdBy  User? @relation("CashMovementBy", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedBy User? @relation("CashMovementApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, shiftId])
+  @@map("cash_movements")
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Slice 7: offline sales
+ * -------------------------------------------------------------------------
+ */
+
+/// Something about an offline sale that differed from the server's view when it synced.
+/// The sale is kept as it happened; a manager reviews and resolves the difference.
+model SaleConflict {
+  id             String           @id @default(uuid()) @db.Uuid
+  tenantId       String           @map("tenant_id") @db.Uuid
+  saleId         String           @map("sale_id") @db.Uuid
+  type           SaleConflictType
+  /// Facts for the reviewer, e.g. the price charged and the current price per item.
+  detail         Json             @default("{}")
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  resolvedAt     DateTime?        @map("resolved_at") @db.Timestamptz(3)
+  resolvedById   String?          @map("resolved_by_id") @db.Uuid
+  resolutionNote String?          @map("resolution_note") @db.VarChar(500)
+
+  sale       Sale  @relation(fields: [tenantId, saleId], references: [tenantId, id], onDelete: Restrict)
+  resolvedBy User? @relation("ConflictResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@unique([saleId, type])
+  @@index([tenantId, resolvedAt, createdAt(sort: Desc)])
+  @@map("sale_conflicts")
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Slice 8: customers, accounts and collections
+ * -------------------------------------------------------------------------
+ */
+
+/// A customer of the business. Personal data is kept to what the shop needs.
+model Customer {
+  id                 String        @id @default(uuid()) @db.Uuid
+  tenantId           String        @map("tenant_id") @db.Uuid
+  number             String        @db.VarChar(20)
+  name               String        @db.VarChar(120)
+  /// E.164 (+94771234567); unique per tenant when present.
+  phone              String?       @db.VarChar(20)
+  email              String?       @db.VarChar(254)
+  address            String?       @db.VarChar(300)
+  notes              String?       @db.VarChar(1000)
+  /// Agreed to receive marketing messages, and when (null: not agreed).
+  marketingConsentAt DateTime?     @map("marketing_consent_at") @db.Timestamptz(3)
+  /// Most the customer may owe; 0 means no buying on account.
+  creditLimitMinor   BigInt        @default(0) @map("credit_limit_minor")
+  /// Positive: owed by the customer. Negative: store credit. Changed only with a ledger entry.
+  balanceMinor       BigInt        @default(0) @map("balance_minor")
+  /// Loyalty points held. Changed only with a loyalty entry; can go below zero after a return
+  /// reverses points the customer already spent.
+  loyaltyPoints      Int           @default(0) @map("loyalty_points")
+  /// Random code in the customer's opt-out link (/u/<code>); unique across all businesses.
+  unsubscribeCode    String        @unique @map("unsubscribe_code") @db.VarChar(16)
+  status             CatalogStatus @default(ACTIVE)
+  version            Int           @default(1)
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  sales    Sale[]
+  entries  CustomerLedgerEntry[]
+  payments CustomerPayment[]
+  loyalty  LoyaltyEntry[]
+  consents ConsentEvent[]
+  messages MessageDelivery[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, number])
+  @@unique([tenantId, phone])
+  @@index([tenantId, status, name])
+  @@map("customers")
+}
+
+/// Append-only account history: every balance change has exactly one entry.
+model CustomerLedgerEntry {
+  id              String            @id @default(uuid()) @db.Uuid
+  tenantId        String            @map("tenant_id") @db.Uuid
+  customerId      String            @map("customer_id") @db.Uuid
+  type            CustomerEntryType
+  /// Signed: positive increases what the customer owes.
+  amountMinor     BigInt            @map("amount_minor")
+  balanceAfter    BigInt            @map("balance_after")
+  referenceType   String            @map("reference_type") @db.VarChar(30)
+  referenceId     String            @map("reference_id") @db.Uuid
+  referenceNumber String            @map("reference_number") @db.VarChar(20)
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  customer Customer @relation(fields: [tenantId, customerId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId, customerId, createdAt, id])
+  @@map("customer_ledger_entries")
+}
+
+/// Money received from a customer against their account (a collection).
+model CustomerPayment {
+  id          String        @id @db.Uuid
+  tenantId    String        @map("tenant_id") @db.Uuid
+  number      String        @db.VarChar(20)
+  customerId  String        @map("customer_id") @db.Uuid
+  method      PaymentMethod
+  amountMinor BigInt        @map("amount_minor")
+  reference   String?       @db.VarChar(40)
+  /// Cash collections go into this shift's drawer.
+  shiftId     String?       @map("shift_id") @db.Uuid
+  createdById String?       @map("created_by_id") @db.Uuid
+  requestHash String        @map("request_hash") @db.Char(64)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  customer  Customer @relation(fields: [tenantId, customerId], references: [tenantId, id], onDelete: Restrict)
+  shift     Shift?   @relation(fields: [tenantId, shiftId], references: [tenantId, id], onDelete: Restrict)
+  createdBy User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, number])
+  @@index([tenantId, customerId, createdAt])
+  @@index([tenantId, shiftId])
+  @@map("customer_payments")
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Slice 9: costing for profit reports
+ * -------------------------------------------------------------------------
+ */
+
+/// Moving weighted-average cost per variant across all branches, updated on each
+/// goods receipt. Four decimals of a minor unit (1.0000 = 10000).
+model VariantCost {
+  tenantId     String   @map("tenant_id") @db.Uuid
+  variantId    String   @map("variant_id") @db.Uuid
+  averageCost4 BigInt   @map("average_cost4")
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant  Tenant         @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  variant ProductVariant @relation(fields: [tenantId, variantId], references: [tenantId, id], onDelete: Restrict)
+
+  @@id([tenantId, variantId])
+  @@unique([variantId])
+  @@map("variant_costs")
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Slice 10: staff, branch restrictions and devices
+ * -------------------------------------------------------------------------
+ */
+
+/// Branches a member may work at. No rows means every branch.
+model MembershipBranch {
+  tenantId     String @map("tenant_id") @db.Uuid
+  membershipId String @map("membership_id") @db.Uuid
+  branchId     String @map("branch_id") @db.Uuid
+
+  membership Membership @relation(fields: [tenantId, membershipId], references: [tenantId, id], onDelete: Cascade)
+  branch     Branch     @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+
+  @@id([membershipId, branchId])
+  @@index([tenantId, branchId])
+  @@map("membership_branches")
+}
+
+/// An emailed invitation to join the business. Only the token's hash is stored.
+model Invitation {
+  id          String     @id @default(uuid()) @db.Uuid
+  tenantId    String     @map("tenant_id") @db.Uuid
+  /// Lower-cased.
+  email       String     @db.VarChar(254)
+  role        TenantRole
+  branchIds   String[]   @default([]) @map("branch_ids") @db.Uuid
+  tokenHash   String     @unique @map("token_hash") @db.Char(64)
+  invitedById String?    @map("invited_by_id") @db.Uuid
+  expiresAt   DateTime   @map("expires_at") @db.Timestamptz(3)
+  acceptedAt  DateTime?  @map("accepted_at") @db.Timestamptz(3)
+  revokedAt   DateTime?  @map("revoked_at") @db.Timestamptz(3)
+  createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  invitedBy User?  @relation(fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("invitations")
+}
+
+/// A till (Android device) registered to a register of the business.
+model Device {
+  tenantId       String    @map("tenant_id") @db.Uuid
+  /// Generated by the device at install time.
+  id             String    @db.Uuid
+  name           String    @db.VarChar(100)
+  branchId       String    @map("branch_id") @db.Uuid
+  registerId     String    @map("register_id") @db.Uuid
+  registeredById String?   @map("registered_by_id") @db.Uuid
+  lastSeenAt     DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  revokedAt      DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  branch       Branch   @relation(fields: [tenantId, branchId], references: [tenantId, id], onDelete: Restrict)
+  register     Register @relation(fields: [tenantId, branchId, registerId], references: [tenantId, branchId, id], onDelete: Restrict)
+  registeredBy User?    @relation("DeviceRegisteredBy", fields: [registeredById], references: [id], onDelete: SetNull)
+
+  @@id([tenantId, id])
+  @@map("devices")
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Slice 11: plans, subscriptions and billing
+ * -------------------------------------------------------------------------
+ */
+
+/// A sellable plan. Platform-wide (not tenant data); prices are tax-exclusive.
+model Plan {
+  id                String   @id @default(uuid()) @db.Uuid
+  code              String   @unique @db.VarChar(32)
+  name              String   @db.VarChar(60)
+  priceMonthlyMinor Int      @map("price_monthly_minor")
+  priceYearlyMinor  Int      @map("price_yearly_minor")
+  currency          String   @default("LKR") @db.Char(3)
+  maxBranches       Int      @map("max_branches")
+  maxRegisters      Int      @map("max_registers")
+  maxStaff          Int      @map("max_staff")
+  maxDevices        Int      @map("max_devices")
+  /// Marketing SMS included per calendar month (the platform pays the SMS gateway).
+  smsPerMonth       Int      @default(0) @map("sms_per_month")
+  /// Offered for sign-up and plan changes.
+  isPublic          Boolean  @default(true) @map("is_public")
+  sortOrder         Int      @default(0) @map("sort_order")
+  version           Int      @default(1)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  subscriptions Subscription[]
+  invoices      BillingInvoice[]
+
+  @@map("plans")
+}
+
+/// One per business.
+model Subscription {
+  tenantId           String             @id @map("tenant_id") @db.Uuid
+  planId             String             @map("plan_id") @db.Uuid
+  status             SubscriptionStatus
+  interval           BillingInterval    @default(MONTH)
+  trialEndsAt        DateTime?          @map("trial_ends_at") @db.Timestamptz(3)
+  currentPeriodStart DateTime?          @map("current_period_start") @db.Timestamptz(3)
+  currentPeriodEnd   DateTime?          @map("current_period_end") @db.Timestamptz(3)
+  graceEndsAt        DateTime?          @map("grace_ends_at") @db.Timestamptz(3)
+  cancelAtPeriodEnd  Boolean            @default(false) @map("cancel_at_period_end")
+  /// The period end a reminder was last sent for, so each is sent once.
+  remindedFor        DateTime?          @map("reminded_for") @db.Timestamptz(3)
+  version            Int                @default(1)
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  plan   Plan   @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([status])
+  @@map("subscriptions")
+}
+
+/// What a business is asked to pay for one billing period.
+model BillingInvoice {
+  id                String               @id @default(uuid()) @db.Uuid
+  tenantId          String               @map("tenant_id") @db.Uuid
+  number            String               @db.VarChar(20)
+  planId            String               @map("plan_id") @db.Uuid
+  interval          BillingInterval
+  status            BillingInvoiceStatus @default(OPEN)
+  subtotalMinor     Int                  @map("subtotal_minor")
+  taxRateBp         Int                  @map("tax_rate_bp")
+  taxMinor          Int                  @map("tax_minor")
+  totalMinor        Int                  @map("total_minor")
+  currency          String               @db.Char(3)
+  /// Set when paid.
+  periodStart       DateTime?            @map("period_start") @db.Timestamptz(3)
+  periodEnd         DateTime?            @map("period_end") @db.Timestamptz(3)
+  provider          String               @db.VarChar(20)
+  providerPaymentId String?              @map("provider_payment_id") @db.VarChar(64)
+  paidAt            DateTime?            @map("paid_at") @db.Timestamptz(3)
+  createdById       String?              @map("created_by_id") @db.Uuid
+  createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant         @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  plan   Plan           @relation(fields: [planId], references: [id], onDelete: Restrict)
+  events PaymentEvent[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("billing_invoices")
+}
+
+/// A verified payment-provider notification, recorded once (idempotency key).
+model PaymentEvent {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId        String   @map("tenant_id") @db.Uuid
+  invoiceId       String   @map("invoice_id") @db.Uuid
+  provider        String   @db.VarChar(20)
+  providerEventId String   @map("provider_event_id") @db.VarChar(100)
+  /// PAID, PENDING, FAILED, CANCELLED, CHARGEBACK
+  outcome         String   @db.VarChar(20)
+  amountMinor     Int      @map("amount_minor")
+  currency        String   @db.Char(3)
+  /// Provider method label only (e.g. VISA); never card numbers or holder names.
+  method          String?  @db.VarChar(20)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant  Tenant         @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  invoice BillingInvoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@unique([provider, providerEventId])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("payment_events")
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  /// SHA-256 of the emailed token.
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("email_verification_tokens")
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Slice 12: platform console (staff of the SaaS operator, not tenants)
+ * -------------------------------------------------------------------------
+ */
+
+/// A platform staff sign-in. Separate from tenant sessions; ends on logout, idle or age.
+model PlatformSession {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(3)
+  lastSeenAt DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(3)
+  ip         String?   @db.VarChar(64)
+  userAgent  String?   @map("user_agent") @db.VarChar(255)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("platform_sessions")
+}
+
+/// Everything platform staff do. Append-only.
+model PlatformAuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  actorUserId String?  @map("actor_user_id") @db.Uuid
+  action      String   @db.VarChar(100)
+  tenantId    String?  @map("tenant_id") @db.Uuid
+  entityType  String?  @map("entity_type") @db.VarChar(60)
+  entityId    String?  @map("entity_id") @db.VarChar(64)
+  metadata    Json?
+  ip          String?  @db.VarChar(64)
+  userAgent   String?  @map("user_agent") @db.VarChar(255)
+  requestId   String?  @map("request_id") @db.VarChar(64)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  actor User? @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("platform_audit_logs")
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Slice 13: feature flags and notifications
+ * -------------------------------------------------------------------------
+ */
+
+/// A switchable feature. Platform data; the keys are defined in @pos/domain.
+model FeatureFlag {
+  key            String   @id @db.VarChar(64)
+  description    String   @db.VarChar(255)
+  defaultEnabled Boolean  @default(false) @map("default_enabled")
+  version        Int      @default(1)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  overrides TenantFeatureFlag[]
+
+  @@map("feature_flags")
+}
+
+/// A business-specific setting that overrides a flag's default.
+model TenantFeatureFlag {
+  tenantId    String   @map("tenant_id") @db.Uuid
+  flagKey     String   @map("flag_key") @db.VarChar(64)
+  enabled     Boolean
+  updatedById String?  @map("updated_by_id") @db.Uuid
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  flag   FeatureFlag @relation(fields: [flagKey], references: [key], onDelete: Cascade)
+
+  @@id([tenantId, flagKey])
+  @@map("tenant_feature_flags")
+}
+
+/// One person's in-app notification. `dedupeKey` makes generation idempotent.
+model Notification {
+  id        String    @id @default(uuid()) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  kind      String    @db.VarChar(40)
+  dedupeKey String    @map("dedupe_key") @db.VarChar(160)
+  /// Parameters for the translated text; never personal data of customers.
+  data      Json
+  link      String?   @db.VarChar(200)
+  readAt    DateTime? @map("read_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId, dedupeKey])
+  @@index([tenantId, userId, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+/// Claims the once-a-day work (alerts, digest) for a business's local date.
+model DailyRun {
+  tenantId  String   @map("tenant_id") @db.Uuid
+  runDate   DateTime @map("run_date") @db.Date
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@id([tenantId, runDate])
+  @@map("daily_runs")
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Slice 13b: loyalty points
+ * -------------------------------------------------------------------------
+ */
+
+enum LoyaltyEntryType {
+  /// Earned on a sale.
+  EARN
+  /// Used to pay for a sale.
+  REDEEM
+  /// Earned points taken back because goods were returned.
+  REVERSE
+  /// Points given back because a payment made with points was refunded.
+  REFUND
+  /// Changed by a manager, with a reason.
+  ADJUST
+}
+
+/// Append-only history of a customer's points; the balance on the customer equals the sum.
+model LoyaltyEntry {
+  id              String           @id @default(uuid()) @db.Uuid
+  tenantId        String           @map("tenant_id") @db.Uuid
+  customerId      String           @map("customer_id") @db.Uuid
+  type            LoyaltyEntryType
+  /// Signed: positive adds points.
+  points          Int
+  balanceAfter    Int              @map("balance_after")
+  /// The sale the points relate to (earning, paying, returns); null for adjustments.
+  saleId          String?          @map("sale_id") @db.Uuid
+  referenceType   String           @map("reference_type") @db.VarChar(30)
+  referenceId     String           @map("reference_id") @db.Uuid
+  referenceNumber String?          @map("reference_number") @db.VarChar(20)
+  note            String?          @db.VarChar(300)
+  createdById     String?          @map("created_by_id") @db.Uuid
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  customer Customer @relation(fields: [tenantId, customerId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId, customerId, createdAt, id])
+  @@index([tenantId, saleId])
+  @@map("loyalty_entries")
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Slice 13c: product images
+ * -------------------------------------------------------------------------
+ */
+
+/// A product photo. The file lives in object storage (re-encoded WebP, metadata
+/// stripped) under a key derived from tenant and image id; position 0 is the main image.
+model ProductImage {
+  id        String   @id @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  productId String   @map("product_id") @db.Uuid
+  position  Int
+  width     Int
+  height    Int
+  /// Size of the stored full image in bytes.
+  bytes     Int
+  /// SHA-256 of the uploaded file: the same photo uploaded twice is stored once.
+  sha256    String   @db.Char(64)
+  createdBy String?  @map("created_by") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  product Product @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, productId, sha256])
+  @@index([tenantId, productId, position])
+  @@map("product_images")
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Slice 13f: customer messaging with recorded consent
+ * -------------------------------------------------------------------------
+ */
+
+/// Append-only record of every marketing consent given or withdrawn.
+model ConsentEvent {
+  id          String        @id @default(uuid()) @db.Uuid
+  tenantId    String        @map("tenant_id") @db.Uuid
+  customerId  String        @map("customer_id") @db.Uuid
+  granted     Boolean
+  source      ConsentSource
+  /// How consent was asked or given, e.g. "Asked at the till".
+  note        String?       @db.VarChar(300)
+  actorUserId String?       @map("actor_user_id") @db.Uuid
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  customer Customer @relation(fields: [tenantId, customerId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId, customerId, createdAt])
+  @@map("consent_events")
+}
+
+/// A marketing message sent to every customer who agreed (id chosen by the client: retries are safe).
+model MessageCampaign {
+  id          String         @id @db.Uuid
+  tenantId    String         @map("tenant_id") @db.Uuid
+  channel     MessageChannel
+  subject     String?        @db.VarChar(120)
+  body        String         @db.VarChar(2000)
+  status      CampaignStatus @default(SENDING)
+  recipients  Int
+  createdBy   String?        @map("created_by") @db.Uuid
+  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  completedAt DateTime?      @map("completed_at") @db.Timestamptz(3)
+
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  deliveries MessageDelivery[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, createdAt])
+  @@map("message_campaigns")
+}
+
+/// One message to one customer.
+model MessageDelivery {
+  id         String         @id @default(uuid()) @db.Uuid
+  tenantId   String         @map("tenant_id") @db.Uuid
+  campaignId String         @map("campaign_id") @db.Uuid
+  customerId String         @map("customer_id") @db.Uuid
+  channel    MessageChannel
+  status     DeliveryStatus @default(QUEUED)
+  attempts   Int            @default(0)
+  /// Short, safe reason for FAILED/SKIPPED (never provider credentials).
+  error      String?        @db.VarChar(200)
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  sentAt     DateTime?      @map("sent_at") @db.Timestamptz(3)
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  campaign MessageCampaign @relation(fields: [tenantId, campaignId], references: [tenantId, id], onDelete: Restrict)
+  customer Customer        @relation(fields: [tenantId, customerId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([campaignId, customerId])
+  @@index([status, createdAt])
+  @@index([tenantId, channel, createdAt])
+  @@map("message_deliveries")
+}

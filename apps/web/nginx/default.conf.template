@@ -1,0 +1,47 @@
+# Rendered at start-up by the nginx image (envsubst): ${API_UPSTREAM}, ${IMAGE_ORIGIN}.
+# TLS is terminated in front (Caddy in infra/deploy, or a load balancer).
+
+server_tokens off;
+client_max_body_size 8m; # CSV imports (5 MB) and product photos (5 MB)
+
+map $http_x_forwarded_proto $forwarded_proto {
+  default $http_x_forwarded_proto;
+  ''      $scheme;
+}
+
+server {
+  listen 8080;
+  root /usr/share/nginx/html;
+
+  include /etc/nginx/conf.d/security-headers.inc;
+
+  location = /healthz {
+    access_log off;
+    default_type text/plain;
+    return 200 "ok\n";
+  }
+
+  location /api/ {
+    proxy_pass http://${API_UPSTREAM};
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $forwarded_proto;
+    proxy_set_header X-Request-Id $request_id;
+    proxy_read_timeout 60s;
+  }
+
+  # Hashed build files never change: cache for a year.
+  location /assets/ {
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    include /etc/nginx/conf.d/security-headers.inc;
+    try_files $uri =404;
+  }
+
+  # The app shell is always revalidated so a release reaches every browser.
+  location / {
+    add_header Cache-Control "no-cache" always;
+    include /etc/nginx/conf.d/security-headers.inc;
+    try_files $uri /index.html;
+  }
+}

@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Lint, typecheck, test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_USER: pos_owner
+          POSTGRES_PASSWORD: pos_owner_dev
+          POSTGRES_DB: pos_dev
+        ports: ['5434:5432']
+        options: >-
+          --health-cmd "pg_isready -U pos_owner -d pos_dev"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      mailpit:
+        image: axllent/mailpit:v1.27
+        ports: ['1026:1025', '8026:8025']
+
+    env:
+      TURBO_TELEMETRY_DISABLED: '1'
+      EXPO_NO_TELEMETRY: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Create database roles (same script as docker compose)
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5434'
+          PGPASSWORD: pos_owner_dev
+          POSTGRES_USER: pos_owner
+          POSTGRES_DB: pos_dev
+          POS_APP_PASSWORD: pos_app_dev
+        run: sh infra/postgres/init/01-roles.sh
+
+      # Accepted advisories (Expo build tooling only) are listed in package.json with reasons
+      # in docs/security/review-2026-10.md (S-10); anything new fails the build.
+      - name: Dependency audit (shipped code)
+        run: pnpm run audit:prod
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      - name: Prepare API environment
+        run: |
+          cp apps/api/.env.example apps/api/.env
+          sed -i "s/^JWT_ACCESS_SECRET=.*/JWT_ACCESS_SECRET=ci-$(openssl rand -hex 24)/" apps/api/.env
+
+      - name: Apply migrations to clean databases
+        run: pnpm db:deploy && pnpm db:test:deploy
+
+      # Same object storage as infra/docker-compose.yml (service containers cannot take a command).
+      - name: Start object storage
+        run: |
+          docker run -d --name storage -p 127.0.0.1:8334:8333 \
+            -v "$PWD/infra/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro" \
+            chrislusf/seaweedfs:3.97 server -dir=/data -ip=127.0.0.1 -ip.bind=0.0.0.0 \
+            -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json -volume.max=0 -master.volumeSizeLimitMB=64
+          for i in $(seq 1 60); do curl -fs http://127.0.0.1:8334/healthz >/dev/null && break; sleep 2; done
+          pnpm --filter @pos/api storage:init
+          pnpm --filter @pos/api exec dotenv -e .env.test -- node dist/scripts/storage-init.js
+
+      - name: Unit and integration tests
+        run: pnpm test
+
+      - name: Install Playwright browser
+        run: pnpm --filter @pos/web exec playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        run: pnpm test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          retention-days: 7
+
+  images:
+    name: Build production images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Builds only (no registry is configured); a release workflow tags and pushes them.
+      - name: API image
+        run: docker build -f apps/api/Dockerfile --target api -t ensoftic-pos-api:ci .
+
+      - name: Migration image
+        run: docker build -f apps/api/Dockerfile --target migrate -t ensoftic-pos-migrate:ci .
+
+      - name: Web image
+        run: docker build -f apps/web/Dockerfile -t ensoftic-pos-web:ci .
+
+      - name: Web image serves the app with its security headers
+        run: |
+          docker run -d --name web -p 8080:8080 -e API_UPSTREAM=127.0.0.1:9 ensoftic-pos-web:ci
+          for i in $(seq 1 30); do curl -fs http://127.0.0.1:8080/healthz >/dev/null && break; sleep 1; done
+          curl -fsI http://127.0.0.1:8080/ | tee headers.txt
+          grep -qi "content-security-policy: default-src 'self'" headers.txt
+          grep -qi "strict-transport-security" headers.txt
+          grep -qi "x-frame-options: DENY" headers.txt

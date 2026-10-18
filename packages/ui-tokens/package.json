@@ -1,0 +1,42 @@
+{
+  "name": "@pos/ui-tokens",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Design tokens shared by the web (as CSS variables) and mobile (as TS values) apps.",
+  "sideEffects": [
+    "*.css"
+  ],
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "./theme.css": "./dist/theme.css"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup && node scripts/emit-css.mjs",
+    "dev": "tsup --watch --onSuccess \"node scripts/emit-css.mjs\"",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "vitest run",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@pos/config": "workspace:*",
+    "tsup": "8.5.1",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
+  }
+}

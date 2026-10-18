@@ -1,0 +1,38 @@
+# Backup jobs, run nightly by the host scheduler (see nightly.sh and
+# docs/operations/backup-and-restore.md). Settings come from .env next to this file.
+name: ensoftic-pos-backup
+
+services:
+  db:
+    image: postgres:17.6-alpine
+    command: ['sh', '/scripts/backup-db.sh']
+    environment:
+      SOURCE_URL: ${MIGRATION_DATABASE_URL}
+    volumes:
+      - ./:/scripts:ro
+      - dumps:/backups
+
+  offsite:
+    image: rclone/rclone:1.71.1
+    entrypoint: ['sh', '/scripts/offsite.sh']
+    command: ['backup']
+    env_file: [.env]
+    volumes:
+      - ./:/scripts:ro
+      - dumps:/backups
+
+  # Restore drill on a separate, non-production database server (DRILL_ADMIN_URL).
+  drill:
+    image: postgres:17.6-alpine
+    profiles: [drill]
+    command: ['sh', '/scripts/restore-drill.sh']
+    environment:
+      ADMIN_URL: ${DRILL_ADMIN_URL}
+      APP_URL: ${DRILL_APP_URL}
+    volumes:
+      - ./:/scripts:ro
+      - dumps:/backups:ro
+
+volumes:
+  # Local copies of recent dumps (the off-site copy is the one that counts).
+  dumps:

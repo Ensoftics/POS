@@ -1,0 +1,17 @@
+# Build context for apps/api/Dockerfile and apps/web/Dockerfile (both use the repo root).
+.git
+**/node_modules
+**/dist
+**/.turbo
+**/coverage
+**/test-results
+**/playwright-report
+**/.env
+**/.env.*
+!**/.env.example
+infra/load/fixture.json
+infra/load/results
+docs/api
+# The Android app is not part of these images; its manifest stays so the lockfile matches.
+apps/mobile/**
+!apps/mobile/package.json

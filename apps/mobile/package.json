@@ -1,0 +1,72 @@
+{
+  "name": "@pos/mobile",
+  "version": "0.1.0",
+  "main": "expo-router/entry",
+  "dependencies": {
+    "@pos/api-client": "workspace:*",
+    "@pos/contracts": "workspace:*",
+    "@pos/domain": "workspace:*",
+    "@pos/i18n": "workspace:*",
+    "@pos/offline": "workspace:*",
+    "@pos/ui-tokens": "workspace:*",
+    "expo": "~58.0.14",
+    "expo-camera": "~58.0.10",
+    "expo-constants": "~58.0.12",
+    "expo-linking": "~58.0.13",
+    "expo-localization": "~58.0.4",
+    "expo-router": "~58.0.23",
+    "expo-secure-store": "~58.0.2",
+    "expo-sqlite": "~58.0.13",
+    "expo-status-bar": "~58.0.3",
+    "fast-png": "8.0.0",
+    "i18next": "26.4.7",
+    "react": "19.3.0",
+    "react-i18next": "17.0.19",
+    "react-native": "0.88.0",
+    "react-native-ble-plx": "3.5.1",
+    "react-native-safe-area-context": "~5.10.1",
+    "react-native-screens": "~4.30.0",
+    "react-native-view-shot": "6.1.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@testing-library/react-native": "14.1.0",
+    "@types/jest": "30.0.0",
+    "@types/react": "~19.3.0",
+    "jest": "30.5.2",
+    "jest-expo": "58.0.11",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "jest",
+    "test": "jest",
+    "doctor": "expo-doctor"
+  },
+  "private": true,
+  "description": "Android POS app for cashiers and shop managers.",
+  "jest": {
+    "preset": "jest-expo",
+    "transformIgnorePatterns": [
+      "node_modules/(?!(.pnpm|(jest-)?react-native|@react-native(-community)?|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg|fast-png|iobuffer))"
+    ],
+    "setupFiles": [
+      "./jest.setup.ts"
+    ],
+    "testTimeout": 15000,
+    "setupFilesAfterEnv": [
+      "./jest.after-env.ts"
+    ]
+  },
+  "expo": {
+    "install": {
+      "exclude": [
+        "jest",
+        "@types/jest"
+      ]
+    }
+  }
+}
