@@ -1,0 +1,12 @@
+# When PostgreSQL runs on the same server (infra/deploy/docker-compose.single-server.yml),
+# the backup job joins the app's private network to reach it as host "postgres".
+# Use with: COMPOSE_FILE=docker-compose.yml:docker-compose.single-server.yml (and
+# COMPOSE_PATH_SEPARATOR=:) in infra/backup/.env.
+services:
+  db:
+    networks: [app]
+
+networks:
+  app:
+    name: ensoftic-pos-prod_default
+    external: true

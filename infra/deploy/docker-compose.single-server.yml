@@ -1,0 +1,35 @@
+# Adds PostgreSQL on the same server (for a pilot on one free server, e.g. Oracle Cloud
+# Always Free). Use together with docker-compose.yml; make-env.sh sets COMPOSE_FILE so plain
+# `docker compose ...` picks up both. The database is never published to the internet.
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: pos_super
+      POSTGRES_PASSWORD: ${POSTGRES_SUPER_PASSWORD}
+      POSTGRES_DB: postgres
+      POS_OWNER_PASSWORD: ${POS_OWNER_PASSWORD}
+      POS_APP_PASSWORD: ${POS_APP_PASSWORD}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U pos_super -d pos']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+    shm_size: 256mb
+
+  migrate:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pg-data:
