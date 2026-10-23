@@ -4,7 +4,14 @@ import { NavLink } from 'react-router';
 import { useUnreadCount } from '../lib/notifications';
 
 /** Header link to the notifications page with the unread count. */
-export function NotificationBell({ onNavigate }: { onNavigate?: () => void }) {
+export function NotificationBell({
+  onNavigate,
+  onDark = false,
+}: {
+  onNavigate?: () => void;
+  /** Styles for the indigo app shell. */
+  onDark?: boolean;
+}) {
   const { t } = useTranslation();
   const unread = useUnreadCount().data?.unread ?? 0;
   return (
@@ -13,7 +20,15 @@ export function NotificationBell({ onNavigate }: { onNavigate?: () => void }) {
       onClick={onNavigate}
       aria-label={unread ? t('nav.notificationsUnread', { count: unread }) : t('nav.notifications')}
       className={({ isActive }) =>
-        `relative flex size-11 items-center justify-center rounded-md ${isActive ? 'bg-brand-50 text-brand-800' : 'text-neutral-700 hover:bg-neutral-100'}`
+        `relative flex size-11 shrink-0 items-center justify-center rounded-md ${
+          onDark
+            ? isActive
+              ? 'bg-white/15 text-white'
+              : 'text-brand-100 hover:bg-white/10 hover:text-white'
+            : isActive
+              ? 'bg-brand-50 text-brand-800'
+              : 'text-neutral-700 hover:bg-neutral-100'
+        }`
       }
     >
       <Bell aria-hidden className="size-5" />

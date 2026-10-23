@@ -3,19 +3,28 @@
  * on white, and `*-50`/white on `*-600`+ backgrounds, both exceed 4.5:1.
  */
 export const colors = {
+  /** Handloom indigo: the shell, primary actions and links. */
   brand: {
-    50: '#f0fdfa',
-    100: '#ccfbf1',
-    200: '#99f6e4',
-    500: '#14b8a6',
-    600: '#0d9488',
-    700: '#0f766e',
-    800: '#115e59',
-    900: '#134e4a',
+    50: '#eef0fa',
+    100: '#dce0f4',
+    200: '#b9c1e8',
+    500: '#5566c2',
+    600: '#3b4aa8',
+    700: '#2d3a8c',
+    800: '#23306b',
+    900: '#1a2350',
+  },
+  /** Saffron: reserved for selling (the Sell entry and the charge action), never decoration. */
+  accent: {
+    50: '#fff8e6',
+    100: '#fdecbf',
+    400: '#f2b73a',
+    500: '#e8a317',
+    700: '#8a5a00',
   },
   neutral: {
     0: '#ffffff',
-    50: '#f8fafc',
+    50: '#f5f6fa',
     100: '#f1f5f9',
     200: '#e2e8f0',
     300: '#cbd5e1',
@@ -54,7 +63,7 @@ export const touchTarget = 48;
 
 /** Fonts with Sinhala and Tamil coverage are listed before generic fallbacks. */
 export const fontFamily = {
-  sans: "'Inter', 'Noto Sans Sinhala', 'Noto Sans Tamil', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+  sans: "'IBM Plex Sans', 'Noto Sans Sinhala', 'Noto Sans Tamil', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
   mono: "ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace",
 } as const;
 

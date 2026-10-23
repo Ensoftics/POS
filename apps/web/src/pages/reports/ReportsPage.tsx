@@ -41,7 +41,7 @@ function ReportTable<T>({
     <div className="-mx-5 overflow-x-auto px-5">
       <table className="w-full min-w-[36rem] text-sm">
         <caption className="sr-only">{caption}</caption>
-        <thead className="text-left text-xs uppercase text-neutral-600">
+        <thead className="text-left text-xs font-medium text-neutral-600">
           <tr>
             {columns.map((c) => (
               <th

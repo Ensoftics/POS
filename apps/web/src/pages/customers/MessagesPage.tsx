@@ -176,7 +176,7 @@ function Composer({ status }: { status: MessagingStatus }) {
         )}
         {body && (
           <div className="rounded-md border border-neutral-200 bg-neutral-50 p-3 text-sm">
-            <div className="text-xs uppercase text-neutral-600">{t('messaging.preview')}</div>
+            <div className="text-xs font-medium text-neutral-600">{t('messaging.preview')}</div>
             <p className="whitespace-pre-line">{sample}</p>
             <p className="mt-2 text-xs text-neutral-600">{t('messaging.optOutAdded')}</p>
           </div>

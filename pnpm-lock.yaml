@@ -251,9 +251,9 @@ importers:
 
   apps/web:
     dependencies:
-      '@fontsource/inter':
-        specifier: 5.3.0
-        version: 5.3.0
+      '@fontsource/ibm-plex-sans':
+        specifier: 5.2.8
+        version: 5.2.8
       '@fontsource/noto-sans-sinhala':
         specifier: 5.3.0
         version: 5.3.0
@@ -1663,8 +1663,8 @@ packages:
     resolution: {integrity: sha512-EbxYllZ7/ozONVZd425cm4XnolfW+AmSFT5aP7Jdno6oc3WrYQcHz2CO20z/2rwWwYgztmV2PXvYH+BQ8YFjqg==}
     hasBin: true
 
-  '@fontsource/inter@5.3.0':
-    resolution: {integrity: sha512-RofMylZmjlJEfELXeNHFWBRcSs75rGU/6bV2S2jfnvv/3rPXPGe0LgUJTklcHZ9lM4OZmAVFhcJPnACfb91A3g==}
+  '@fontsource/ibm-plex-sans@5.2.8':
+    resolution: {integrity: sha512-eztSXjDhPhcpxNIiGTgMebdLP9qS4rWkysuE1V7c+DjOR0qiezaiDaTwQE7bTnG5HxAY/8M43XKDvs3cYq6ZYQ==}
 
   '@fontsource/noto-sans-sinhala@5.3.0':
     resolution: {integrity: sha512-g52kQSjsB3vHmFbp6zrPfumJxZADhsssOHd3fMkN+hCK1JrpKvSudtJMAAGuVUcrC7r9dqNmmslj7I9VU1dzbw==}
@@ -8810,7 +8810,7 @@ snapshots:
       chalk: 4.1.2
       js-yaml: 4.3.2
 
-  '@fontsource/inter@5.3.0': {}
+  '@fontsource/ibm-plex-sans@5.2.8': {}
 
   '@fontsource/noto-sans-sinhala@5.3.0': {}
 
@@ -9937,7 +9937,9 @@ snapshots:
       metro-runtime: 0.87.1
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.88.0': {}
 

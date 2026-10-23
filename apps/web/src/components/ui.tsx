@@ -10,6 +10,8 @@ function cx(...classes: Array<string | false | null | undefined>): string {
 
 const buttonVariants = {
   primary: 'bg-brand-700 text-white hover:bg-brand-800 disabled:bg-brand-700/60',
+  /** Saffron: only for completing a sale. */
+  accent: 'bg-accent-500 text-brand-900 hover:bg-accent-400 disabled:bg-accent-500/50',
   secondary:
     'bg-white text-neutral-800 ring-1 ring-neutral-300 hover:bg-neutral-100 disabled:text-neutral-400',
   danger:
@@ -282,7 +284,7 @@ export function Card({
 }) {
   return (
     <section
-      className={cx('rounded-lg bg-white p-5 shadow-sm ring-1 ring-neutral-200', className)}
+      className={cx('rounded-lg border border-neutral-200 bg-white p-5', className)}
       aria-label={title}
     >
       {title && <h2 className="mb-4 text-base font-semibold text-neutral-900">{title}</h2>}

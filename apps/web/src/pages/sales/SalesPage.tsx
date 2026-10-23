@@ -93,7 +93,7 @@ export function SalesPage() {
       ) : (
         <Card>
           <table className="w-full text-sm">
-            <thead className="text-left text-xs uppercase text-neutral-600">
+            <thead className="text-left text-xs font-medium text-neutral-600">
               <tr>
                 <th scope="col" className="py-2 pr-3">
                   {t('sales.number')}

@@ -107,10 +107,7 @@ export function BusinessOverview() {
           const change = tile.now - tile.before;
           const good = change === 0 ? null : change > 0 === tile.upIsGood;
           return (
-            <div
-              key={tile.label}
-              className="rounded-lg bg-white p-4 shadow-sm ring-1 ring-neutral-200"
-            >
+            <div key={tile.label} className="rounded-lg bg-white p-4 border border-neutral-200">
               <dt className="text-sm text-neutral-600">{tile.label}</dt>
               <dd className="mt-1 text-2xl font-semibold tabular-nums text-neutral-900">
                 {tile.value}

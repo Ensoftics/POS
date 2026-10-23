@@ -79,7 +79,7 @@ export function CustomerDetailPage() {
       <Card>
         <dl className="grid gap-4 sm:grid-cols-3">
           <div>
-            <dt className="text-xs uppercase text-neutral-600">{t('customers.balance')}</dt>
+            <dt className="text-xs font-medium text-neutral-600">{t('customers.balance')}</dt>
             <dd
               className={`text-xl font-semibold tabular-nums ${c.balanceMinor > 0 ? 'text-warning-700' : ''}`}
               data-testid="customer-balance"
@@ -88,11 +88,11 @@ export function CustomerDetailPage() {
             </dd>
           </div>
           <div>
-            <dt className="text-xs uppercase text-neutral-600">{t('customers.creditLimit')}</dt>
+            <dt className="text-xs font-medium text-neutral-600">{t('customers.creditLimit')}</dt>
             <dd className="text-xl tabular-nums">{money(c.creditLimitMinor)}</dd>
           </div>
           <div>
-            <dt className="text-xs uppercase text-neutral-600">{t('pos.customer.label')}</dt>
+            <dt className="text-xs font-medium text-neutral-600">{t('pos.customer.label')}</dt>
             <dd className="text-sm">
               {t('customers.available', { amount: money(c.availableCreditMinor) })}
             </dd>
@@ -285,7 +285,7 @@ function StatementCard({ customerId }: { customerId: string }) {
             {statement.data.from} – {statement.data.to}
           </p>
           <table className="w-full">
-            <thead className="text-left text-xs uppercase text-neutral-600">
+            <thead className="text-left text-xs font-medium text-neutral-600">
               <tr>
                 <th scope="col" className="py-1 pr-2">
                   {t('sales.date')}

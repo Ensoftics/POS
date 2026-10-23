@@ -78,10 +78,7 @@ export function PlatformPlansPage() {
       ) : (
         <ul className="grid gap-4 lg:grid-cols-2">
           {plans.data.items.map((plan) => (
-            <li
-              key={plan.code}
-              className="rounded-lg bg-white p-5 shadow-sm ring-1 ring-neutral-200"
-            >
+            <li key={plan.code} className="rounded-lg bg-white p-5 border border-neutral-200">
               {editing === plan.code ? (
                 <PlanForm
                   plan={plan}

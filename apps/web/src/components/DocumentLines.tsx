@@ -74,9 +74,7 @@ export function DocumentLines({
   };
 
   const heading = (text: string | false | undefined) => (
-    <span className="text-xs font-semibold uppercase tracking-wide text-neutral-600">
-      {text || ''}
-    </span>
+    <span className="text-xs font-semibold text-neutral-600">{text || ''}</span>
   );
 
   return (

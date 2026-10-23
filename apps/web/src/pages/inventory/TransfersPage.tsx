@@ -153,7 +153,7 @@ function TransferCard({
     <li>
       <section
         aria-label={transfer.number}
-        className="rounded-lg bg-white p-5 shadow-sm ring-1 ring-neutral-200"
+        className="rounded-lg bg-white p-5 border border-neutral-200"
       >
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap items-center gap-2 text-sm">

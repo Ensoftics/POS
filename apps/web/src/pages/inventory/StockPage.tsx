@@ -280,9 +280,7 @@ function StockDetail({ row, branchId }: { row: StockRow; branchId: string }) {
     <div className="mt-3 space-y-4 rounded-md bg-neutral-50 p-4">
       {row.batches.some((b) => b.batchNumber) && (
         <div>
-          <h3 className="mb-1 text-xs font-semibold uppercase text-neutral-600">
-            {t('inventory.batches')}
-          </h3>
+          <h3 className="mb-1 text-xs font-semibold text-neutral-600">{t('inventory.batches')}</h3>
           <ul className="space-y-1 text-sm">
             {row.batches.map((batch) => (
               <li key={batch.batchId ?? 'none'} className="flex justify-between gap-4">
@@ -299,9 +297,7 @@ function StockDetail({ row, branchId }: { row: StockRow; branchId: string }) {
         </div>
       )}
       <div>
-        <h3 className="mb-1 text-xs font-semibold uppercase text-neutral-600">
-          {t('inventory.history')}
-        </h3>
+        <h3 className="mb-1 text-xs font-semibold text-neutral-600">{t('inventory.history')}</h3>
         {movements.isPending ? (
           <Skeleton className="h-16 w-full" />
         ) : movements.isError ? (

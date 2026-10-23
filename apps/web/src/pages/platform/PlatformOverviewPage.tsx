@@ -39,10 +39,7 @@ export function PlatformOverviewPage() {
       </h1>
       <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {tiles.map((tile) => (
-          <div
-            key={tile.label}
-            className="rounded-lg bg-white p-4 shadow-sm ring-1 ring-neutral-200"
-          >
+          <div key={tile.label} className="rounded-lg bg-white p-4 border border-neutral-200">
             <dt className="text-sm text-neutral-600">{tile.label}</dt>
             <dd className="mt-1 text-2xl font-semibold tabular-nums text-neutral-900">
               {tile.value}

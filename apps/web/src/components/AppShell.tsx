@@ -24,7 +24,8 @@ import { useSettings } from '../lib/settings';
 import { AccountBanners } from './AccountBanners';
 import { NotificationBell } from './NotificationBell';
 import { LanguageSwitcher } from './LanguageSwitcher';
-import { Button } from './ui';
+
+type NavItem = { to: string; label: string; icon: typeof Store; visible: boolean };
 
 export function AppShell() {
   const { t } = useTranslation();
@@ -39,121 +40,167 @@ export function AppShell() {
     if (defaultLanguage) void applyBusinessDefaultLanguage(defaultLanguage);
   }, [defaultLanguage]);
 
-  const links = [
-    { to: '/', label: t('nav.dashboard'), icon: LayoutDashboard, visible: true },
-    {
-      to: '/pos',
-      label: t('nav.sell'),
-      icon: ShoppingCart,
-      visible: permissions.includes('sales.create'),
-    },
-    {
-      to: '/sales',
-      label: t('nav.sales'),
-      icon: Receipt,
-      visible: permissions.includes('sales.read'),
-    },
-    {
-      to: '/customers',
-      label: t('nav.customers'),
-      icon: Users,
-      visible: permissions.includes('customers.read'),
-    },
-    {
-      to: '/products',
-      label: t('nav.products'),
-      icon: Package,
-      visible: permissions.includes('products.read'),
-    },
-    {
-      to: '/inventory',
-      label: t('nav.inventory'),
-      icon: Boxes,
-      visible: permissions.includes('inventory.read'),
-    },
-    {
-      to: '/purchasing/orders',
-      label: t('nav.purchasing'),
-      icon: Truck,
-      visible: permissions.includes('purchasing.manage'),
-    },
-    {
-      to: '/reports',
-      label: t('nav.reports'),
-      icon: BarChart3,
-      visible: permissions.includes('reports.view'),
-    },
-    {
-      to: '/activity',
-      label: t('nav.auditLog'),
-      icon: ScrollText,
-      visible: permissions.includes('audit.read'),
-    },
-    {
-      to: '/settings',
-      label: t('nav.settings'),
-      icon: Settings,
-      visible: permissions.includes('settings.read'),
-    },
-  ].filter((link) => link.visible);
+  const canSell = permissions.includes('sales.create');
+
+  // Groups follow the shop's day: overview, the counter, stock, then the books and setup.
+  const groups: NavItem[][] = [
+    [{ to: '/', label: t('nav.dashboard'), icon: LayoutDashboard, visible: true }],
+    [
+      {
+        to: '/sales',
+        label: t('nav.sales'),
+        icon: Receipt,
+        visible: permissions.includes('sales.read'),
+      },
+      {
+        to: '/customers',
+        label: t('nav.customers'),
+        icon: Users,
+        visible: permissions.includes('customers.read'),
+      },
+    ],
+    [
+      {
+        to: '/products',
+        label: t('nav.products'),
+        icon: Package,
+        visible: permissions.includes('products.read'),
+      },
+      {
+        to: '/inventory',
+        label: t('nav.inventory'),
+        icon: Boxes,
+        visible: permissions.includes('inventory.read'),
+      },
+      {
+        to: '/purchasing/orders',
+        label: t('nav.purchasing'),
+        icon: Truck,
+        visible: permissions.includes('purchasing.manage'),
+      },
+    ],
+    [
+      {
+        to: '/reports',
+        label: t('nav.reports'),
+        icon: BarChart3,
+        visible: permissions.includes('reports.view'),
+      },
+      {
+        to: '/activity',
+        label: t('nav.auditLog'),
+        icon: ScrollText,
+        visible: permissions.includes('audit.read'),
+      },
+      {
+        to: '/settings',
+        label: t('nav.settings'),
+        icon: Settings,
+        visible: permissions.includes('settings.read'),
+      },
+    ],
+  ]
+    .map((group) => group.filter((link) => link.visible))
+    .filter((group) => group.length > 0);
 
   const handleSignOut = async () => {
     setSigningOut(true);
     await signOut().finally(() => setSigningOut(false));
   };
 
+  const closeMenu = () => setMenuOpen(false);
+
+  /** Shared by the desktop sidebar and the mobile drawer. */
+  const navigation = (
+    <nav aria-label={t('nav.main')} className="flex flex-col gap-4">
+      {canSell && (
+        <NavLink
+          to="/pos"
+          onClick={closeMenu}
+          className={({ isActive }) =>
+            `flex min-h-12 items-center gap-2.5 rounded-md bg-accent-500 px-3 text-base font-semibold text-brand-900 hover:bg-accent-400 ${isActive ? 'ring-2 ring-white/70 ring-offset-2 ring-offset-brand-800' : ''}`
+          }
+        >
+          <ShoppingCart aria-hidden className="size-5" />
+          {t('nav.sell')}
+        </NavLink>
+      )}
+      {groups.map((group, index) => (
+        <ul key={index} className="flex flex-col gap-0.5">
+          {group.map(({ to, label, icon: Icon }) => (
+            <li key={to}>
+              <NavLink
+                to={to}
+                end={to === '/'}
+                onClick={closeMenu}
+                className={({ isActive }) =>
+                  `flex min-h-10 items-center gap-2.5 rounded-md px-3 text-sm ${isActive ? 'bg-white/12 font-semibold text-white' : 'text-brand-100 hover:bg-white/6 hover:text-white'}`
+                }
+              >
+                <Icon aria-hidden className="size-4 shrink-0" />
+                {label}
+              </NavLink>
+            </li>
+          ))}
+        </ul>
+      ))}
+    </nav>
+  );
+
+  const account = (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1 text-sm leading-tight">
+          <div className="truncate font-medium text-white">{user.fullName}</div>
+          <div className="truncate text-brand-200">{t(`roles.${role}`)}</div>
+        </div>
+        <NotificationBell onDark onNavigate={closeMenu} />
+      </div>
+      <LanguageSwitcher languages={enabledLanguages} onDark />
+      <button
+        type="button"
+        onClick={() => void handleSignOut()}
+        disabled={signingOut}
+        aria-busy={signingOut || undefined}
+        className="flex min-h-10 w-full items-center gap-2.5 rounded-md px-3 text-sm font-medium text-brand-100 hover:bg-white/6 hover:text-white disabled:opacity-60"
+      >
+        <LogOut aria-hidden className="size-4" />
+        {t('common.signOut')}
+      </button>
+    </div>
+  );
+
+  const tenantName = (
+    <div className="flex min-w-0 items-start gap-2.5">
+      <Store aria-hidden className="mt-0.5 size-5 shrink-0 text-accent-400" />
+      <span className="min-w-0 font-semibold leading-snug text-white [overflow-wrap:anywhere]">
+        {tenant.name}
+      </span>
+    </div>
+  );
+
   return (
-    <div className="min-h-dvh">
+    <div className="min-h-dvh xl:pl-64">
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded focus:bg-white focus:px-3 focus:py-2"
       >
         {t('common.skipToContent')}
       </a>
-      <header className="sticky top-0 z-30 border-b border-neutral-200 bg-white">
-        <div className="mx-auto flex h-16 max-w-7xl items-center gap-3 px-4">
-          <div className="flex min-w-0 items-center gap-2 font-semibold text-brand-800">
-            <Store aria-hidden className="size-6 shrink-0" />
-            <span className="truncate">{tenant.name}</span>
-          </div>
-          <nav aria-label={t('nav.main')} className="ml-2 hidden gap-0.5 lg:flex">
-            {links.map(({ to, label, icon: Icon }) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={to === '/'}
-                className={({ isActive }) =>
-                  `flex min-h-10 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-sm font-medium ${isActive ? 'bg-brand-50 text-brand-800' : 'text-neutral-700 hover:bg-neutral-100'}`
-                }
-              >
-                <Icon aria-hidden className="size-4" />
-                {label}
-              </NavLink>
-            ))}
-          </nav>
-          <div className="ml-auto hidden items-center gap-3 lg:flex">
-            <NotificationBell />
-            <LanguageSwitcher languages={enabledLanguages} />
-            <div className="hidden whitespace-nowrap text-right text-sm leading-tight 2xl:block">
-              <div className="font-medium text-neutral-900">{user.fullName}</div>
-              <div className="text-neutral-600">{t(`roles.${role}`)}</div>
-            </div>
-            <Button
-              variant="secondary"
-              className="whitespace-nowrap"
-              onClick={handleSignOut}
-              loading={signingOut}
-            >
-              <LogOut aria-hidden className="size-4" />
-              {t('common.signOut')}
-            </Button>
-          </div>
-          <div className="ml-auto lg:hidden">
-            <NotificationBell onNavigate={() => setMenuOpen(false)} />
-          </div>
+
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col bg-brand-800 xl:flex">
+        <div className="px-5 pb-6 pt-6">{tenantName}</div>
+        <div className="flex-1 overflow-y-auto px-3 pb-6">{navigation}</div>
+        <div className="border-t border-white/10 px-3 py-4">{account}</div>
+      </aside>
+
+      <header className="sticky top-0 z-30 bg-brand-800 xl:hidden">
+        <div className="flex h-14 items-center gap-2 px-4">
+          <div className="min-w-0 flex-1 [&_span]:truncate">{tenantName}</div>
+          {!menuOpen && <NotificationBell onDark />}
           <button
             type="button"
-            className="flex size-11 items-center justify-center rounded-md lg:hidden"
+            className="flex size-11 items-center justify-center rounded-md text-white hover:bg-white/10"
             aria-expanded={menuOpen}
             aria-controls="mobile-menu"
             aria-label={menuOpen ? t('nav.closeMenu') : t('nav.openMenu')}
@@ -165,31 +212,15 @@ export function AppShell() {
         {menuOpen && (
           <div
             id="mobile-menu"
-            className="space-y-3 border-t border-neutral-200 px-4 py-4 lg:hidden"
+            className="max-h-[calc(100dvh-3.5rem)] space-y-6 overflow-y-auto border-t border-white/10 px-4 py-4"
           >
-            <nav aria-label={t('nav.main')} className="flex flex-col gap-1">
-              {links.map(({ to, label, icon: Icon }) => (
-                <NavLink
-                  key={to}
-                  to={to}
-                  end={to === '/'}
-                  onClick={() => setMenuOpen(false)}
-                  className="flex min-h-11 items-center gap-2 rounded-md px-3 text-sm font-medium text-neutral-800 hover:bg-neutral-100"
-                >
-                  <Icon aria-hidden className="size-4" />
-                  {label}
-                </NavLink>
-              ))}
-            </nav>
-            <LanguageSwitcher languages={enabledLanguages} />
-            <Button variant="secondary" block onClick={handleSignOut} loading={signingOut}>
-              <LogOut aria-hidden className="size-4" />
-              {t('common.signOut')}
-            </Button>
+            {navigation}
+            <div className="border-t border-white/10 pt-4">{account}</div>
           </div>
         )}
       </header>
-      <main id="main" className="mx-auto max-w-7xl px-4 py-8">
+
+      <main id="main" className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
         <AccountBanners />
         <Outlet />
       </main>

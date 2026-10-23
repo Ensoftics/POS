@@ -159,7 +159,7 @@ function BranchCard({
   return (
     <section
       aria-labelledby={`branch-${branch.id}`}
-      className={`rounded-lg bg-white p-5 shadow-sm ring-1 ring-neutral-200 ${archived ? 'opacity-75' : ''}`}
+      className={`rounded-lg bg-white p-5 border border-neutral-200 ${archived ? 'opacity-75' : ''}`}
     >
       {editing ? (
         <BranchForm

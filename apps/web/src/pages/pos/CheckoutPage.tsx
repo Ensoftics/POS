@@ -586,7 +586,14 @@ function Till({
             setPaymentError(null);
           }}
         />
-        <Button block loading={submitting} disabled={!canComplete} onClick={() => void complete()}>
+        <Button
+          variant="accent"
+          block
+          className="min-h-14 text-base"
+          loading={submitting}
+          disabled={!canComplete}
+          onClick={() => void complete()}
+        >
           {submitting ? t('pos.completing') : `${t('pos.complete')} · ${money(totals.totalMinor)}`}
         </Button>
       </Card>
